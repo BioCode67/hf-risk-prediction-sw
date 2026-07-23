@@ -80,6 +80,42 @@ def test_sanitize_vitals_drops_artifacts_and_fixes_fahrenheit():
     assert pd.isna(clean["temperature"].iloc[3])  # 20 °C below plausible range
 
 
+def test_synthetic_cohort_has_demographics():
+    from vitals_data import generate_synthetic_cohort
+
+    cohort = generate_synthetic_cohort(n_patients=30, seed=1)
+    assert cohort.demographics is not None
+    assert set(cohort.demographics.columns) == {"patient_id", "age", "sex"}
+    assert len(cohort.demographics) == 30
+    assert set(cohort.demographics["sex"].unique()) <= {0, 1}
+
+
+def test_add_static_features_adds_age_sex():
+    from vitals_data import add_static_features, build_windows, generate_synthetic_cohort
+
+    cohort = generate_synthetic_cohort(n_patients=80, seed=2)
+    windowed = build_windows(cohort)
+    with_static = add_static_features(windowed, cohort)
+    assert {"static_age", "static_sex"} <= set(with_static.features.columns)
+    assert not with_static.features[["static_age", "static_sex"]].isna().any().any()
+    assert len(with_static.feature_names) == len(windowed.feature_names) + 2
+
+
+def test_khth_adapter_builds_demographics():
+    import pandas as pd
+
+    from vitals_data import cohort_from_khth
+
+    vital = pd.DataFrame(
+        [{"PATID": "1", "INDD": "20230101", "VSDT": "202301011400", "VS_GBN": "HR", "VS_RSLT": "80"}]
+    )
+    pinfo = pd.DataFrame([{"PATID": "1", "INDD": "20230101", "AGE": 70, "SEX": "M", "CARDT": "202301011600"}])
+    cohort = cohort_from_khth(vital, pinfo)
+    assert cohort.demographics is not None
+    row = cohort.demographics.set_index("patient_id").loc["1_20230101"]
+    assert row["age"] == 70 and row["sex"] == 1  # M -> 1
+
+
 def test_cohort_from_mimic_adapter():
     """The MIMIC adapter pivots chartevents, converts °F→°C, and labels arrests."""
     import pandas as pd

@@ -112,10 +112,13 @@ class VitalSignsCohort:
             column per entry in :data:`VITALS`.
         events: One row per patient with ``patient_id`` and ``arrest_hour``
             (``NaN`` for patients who never arrest — i.e. controls).
+        demographics: Optional per-patient static frame with ``patient_id``,
+            ``age`` and ``sex`` (1=male, 0=female); ``None`` when unavailable.
     """
 
     vitals: pd.DataFrame
     events: pd.DataFrame
+    demographics: pd.DataFrame | None = None
 
 
 @dataclass
@@ -185,6 +188,7 @@ def generate_synthetic_cohort(
     rng = np.random.default_rng(seed)
     vital_rows: list[dict[str, float]] = []
     event_rows: list[dict[str, float]] = []
+    demo_rows: list[dict[str, float]] = []
     # Earliest arrest hour that still leaves room for stable history + ramp.
     earliest_arrest = deterioration_ramp_hours + OBSERVATION_WINDOW_HOURS + 2
 
@@ -192,6 +196,9 @@ def generate_synthetic_cohort(
         stay = int(rng.integers(min_stay_hours, max_stay_hours + 1))
         is_arrest = rng.random() < arrest_fraction
         baseline = {v: float(rng.normal(*_HEALTHY_BASELINE[v])) for v in VITALS}
+        demo_rows.append(
+            {"patient_id": patient_id, "age": int(rng.integers(20, 90)), "sex": int(rng.random() < 0.55)}
+        )
         # Per-patient deterioration severity: some patients crash hard, others
         # decompensate subtly — this is what makes early warning genuinely hard.
         severity = float(rng.uniform(0.45, 1.1))
@@ -237,6 +244,7 @@ def generate_synthetic_cohort(
     return VitalSignsCohort(
         vitals=pd.DataFrame(vital_rows),
         events=pd.DataFrame(event_rows),
+        demographics=pd.DataFrame(demo_rows),
     )
 
 
@@ -306,6 +314,8 @@ def cohort_from_khth(
     type_col: str = "VS_GBN",
     value_col: str = "VS_RSLT",
     arrest_col: str = "CARDT",
+    age_col: str = "AGE",
+    sex_col: str = "SEX",
     bucket_hours: int = 1,
     vs_type_map: dict[str, str] | None = None,
 ) -> VitalSignsCohort:
@@ -358,11 +368,19 @@ def cohort_from_khth(
     info = pinfo.copy()
     info["patient_id"] = info[patient_col].astype(str) + "_" + info[admit_col].astype(str)
     info["_arrest"] = _parse_khth_datetime(info[arrest_col])
+
+    demographics: pd.DataFrame | None = None
+    if age_col in info.columns or sex_col in info.columns:
+        demo = pd.DataFrame({"patient_id": info["patient_id"]})
+        demo["age"] = pd.to_numeric(info[age_col], errors="coerce") if age_col in info.columns else np.nan
+        demo["sex"] = info[sex_col].map({"M": 1, "F": 0}) if sex_col in info.columns else np.nan
+        demographics = demo.drop_duplicates("patient_id").reset_index(drop=True)
+
     info = stay_first_dt.merge(info[["patient_id", "_arrest"]], on="patient_id", how="left")
     info["arrest_hour"] = (info["_arrest"] - info["_first"]) / pd.Timedelta(hours=1)
     events = info[["patient_id", "arrest_hour"]].copy()
 
-    return VitalSignsCohort(vitals=sanitize_vitals(vitals_wide), events=events)
+    return VitalSignsCohort(vitals=sanitize_vitals(vitals_wide), events=events, demographics=demographics)
 
 
 # --- MIMIC-IV adapter (real-data development & controls) ------------------
@@ -581,6 +599,34 @@ def add_personalized_features(
             new_names.append(dev_col)
     features[new_names] = features[new_names].fillna(0.0)
 
+    return WindowedDataset(
+        features=features,
+        labels=windowed.labels,
+        groups=windowed.groups,
+        feature_names=windowed.feature_names + new_names,
+        time_to_arrest=windowed.time_to_arrest,
+    )
+
+
+def add_static_features(windowed: WindowedDataset, cohort: VitalSignsCohort) -> WindowedDataset:
+    """Append per-patient static demographics (``static_age``, ``static_sex``).
+
+    No-op when the cohort has no demographics. Missing values are filled with the
+    column median so the features stay usable on partial data.
+    """
+    if cohort.demographics is None:
+        return windowed
+    demo = cohort.demographics.drop_duplicates("patient_id").set_index("patient_id")
+    aligned = demo.reindex(windowed.groups.to_numpy()).reset_index(drop=True)
+
+    features = windowed.features.copy()
+    new_names: list[str] = []
+    for col in ("age", "sex"):
+        if col in aligned.columns:
+            features[f"static_{col}"] = pd.to_numeric(aligned[col], errors="coerce").to_numpy()
+            new_names.append(f"static_{col}")
+    if new_names:
+        features[new_names] = features[new_names].apply(lambda c: c.fillna(c.median()))
     return WindowedDataset(
         features=features,
         labels=windowed.labels,
