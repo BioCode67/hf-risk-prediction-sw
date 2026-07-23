@@ -325,6 +325,87 @@ def cohort_from_khth(
     return VitalSignsCohort(vitals=vitals_wide, events=events)
 
 
+# --- MIMIC-IV adapter (real-data development & controls) ------------------
+
+# MIMIC-IV (metavision) chartevents itemids for the six vitals we model.
+MIMIC_ITEMID_MAP: Final[dict[int, str]] = {
+    220045: "pulse",                 # Heart Rate
+    220050: "sbp", 220179: "sbp",    # Arterial / NIBP systolic
+    220051: "dbp", 220180: "dbp",    # Arterial / NIBP diastolic
+    223762: "temperature", 223761: "temperature",  # Temp Celsius / Fahrenheit
+    220277: "spo2",                  # SpO2
+    220210: "resp_rate",             # Respiratory rate
+}
+_MIMIC_FAHRENHEIT_ITEMIDS: Final[frozenset[int]] = frozenset({223761})
+
+
+def cohort_from_mimic(
+    chartevents: pd.DataFrame,
+    arrest_events: pd.DataFrame | None = None,
+    *,
+    id_col: str = "stay_id",
+    time_col: str = "charttime",
+    item_col: str = "itemid",
+    value_col: str = "valuenum",
+    itemid_map: dict[int, str] | None = None,
+    arrest_id_col: str = "stay_id",
+    arrest_time_col: str = "arrest_time",
+    bucket_hours: int = 1,
+) -> VitalSignsCohort:
+    """Adapt MIMIC-IV ``chartevents`` to a :class:`VitalSignsCohort`.
+
+    MIMIC-IV is the real, publicly available proxy used to *develop and validate*
+    this pipeline before the 안심존: unlike the competition's case-only cohort it
+    contains both arrest and non-arrest ICU stays, so it supplies the **controls**
+    needed to measure false alarms honestly. Map cardiac-arrest times in via
+    ``arrest_events`` (``stay_id`` -> ``arrest_time``); stays absent from it are
+    treated as controls (``arrest_hour = NaN``).
+
+    Fahrenheit temperatures (itemid 223761) are converted to Celsius. Timestamps
+    are bucketed to ``bucket_hours``-hour bins, mirroring ``cohort_from_khth`` so
+    the downstream windowing/labelling is identical across data sources.
+    """
+    itemid_map = itemid_map or MIMIC_ITEMID_MAP
+    records = chartevents.copy()
+    records["patient_id"] = records[id_col].astype(str)
+    records["_dt"] = pd.to_datetime(records[time_col], errors="coerce")
+    records["_value"] = pd.to_numeric(records[value_col], errors="coerce")
+
+    fahrenheit = records[item_col].isin(_MIMIC_FAHRENHEIT_ITEMIDS)
+    records.loc[fahrenheit, "_value"] = (records.loc[fahrenheit, "_value"] - 32.0) * 5.0 / 9.0
+    records["_canonical"] = records[item_col].map(itemid_map)
+    records = records.dropna(subset=["_dt", "_canonical"])
+
+    first_dt = records.groupby("patient_id")["_dt"].transform("min")
+    bucket = pd.Timedelta(hours=bucket_hours)
+    records["hour"] = (((records["_dt"] - first_dt) // bucket).astype(int) * bucket_hours)
+
+    wide = records.pivot_table(
+        index=["patient_id", "hour"], columns="_canonical", values="_value", aggfunc="mean"
+    ).reset_index()
+    wide.columns.name = None
+    for vital_name in VITALS:
+        if vital_name not in wide.columns:
+            wide[vital_name] = np.nan
+    vitals_wide = (
+        wide[["patient_id", "hour", *VITALS]].sort_values(["patient_id", "hour"]).reset_index(drop=True)
+    )
+
+    stay_first = records.groupby("patient_id")["_dt"].min().rename("_first").reset_index()
+    if arrest_events is not None:
+        arrests = arrest_events.copy()
+        arrests["patient_id"] = arrests[arrest_id_col].astype(str)
+        arrests["_arrest"] = pd.to_datetime(arrests[arrest_time_col], errors="coerce")
+        merged = stay_first.merge(arrests[["patient_id", "_arrest"]], on="patient_id", how="left")
+        merged["arrest_hour"] = (merged["_arrest"] - merged["_first"]) / pd.Timedelta(hours=1)
+    else:
+        merged = stay_first.copy()
+        merged["arrest_hour"] = float("nan")  # every stay is a control
+    cohort_events = merged[["patient_id", "arrest_hour"]].copy()
+
+    return VitalSignsCohort(vitals=vitals_wide, events=cohort_events)
+
+
 # --- Windowing & labelling ------------------------------------------------
 
 
@@ -424,6 +505,44 @@ def build_windows(
         labels=pd.Series(labels, name="label"),
         groups=pd.Series(groups, name="patient_id"),
         feature_names=names,
+    )
+
+
+PERSONAL_BASELINE_HOURS: Final[int] = 6
+
+
+def add_personalized_features(
+    windowed: WindowedDataset,
+    cohort: VitalSignsCohort,
+    baseline_hours: int = PERSONAL_BASELINE_HOURS,
+) -> WindowedDataset:
+    """Append 'deviation from the patient's own baseline' features.
+
+    Each patient's baseline is the mean of their first ``baseline_hours`` stable
+    hours. For every window we add, per vital, how far its recent level sits from
+    that personal baseline (``{vital}_last_dev`` / ``{vital}_mean_dev``). A value
+    that looks normal for the ward can be a large *personal* deviation — this is
+    the core of the false-alarm-reduction thesis and turns the case-only cohort's
+    within-patient structure into the method itself.
+    """
+    early = cohort.vitals[cohort.vitals["hour"] < baseline_hours]
+    baseline = early.groupby("patient_id")[list(VITALS)].mean()
+    aligned = baseline.reindex(windowed.groups.to_numpy()).reset_index(drop=True)
+
+    features = windowed.features.copy()
+    new_names: list[str] = []
+    for vital in VITALS:
+        for stat in ("last", "mean"):
+            dev_col = f"{vital}_{stat}_dev"
+            features[dev_col] = features[f"{vital}_{stat}"].to_numpy() - aligned[vital].to_numpy()
+            new_names.append(dev_col)
+    features[new_names] = features[new_names].fillna(0.0)
+
+    return WindowedDataset(
+        features=features,
+        labels=windowed.labels,
+        groups=windowed.groups,
+        feature_names=windowed.feature_names + new_names,
     )
 
 

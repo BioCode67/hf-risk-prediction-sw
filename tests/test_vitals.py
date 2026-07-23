@@ -55,6 +55,65 @@ def test_cohort_from_khth_adapter():
     assert list(windowed.features.columns) == feature_names()
 
 
+def test_cohort_from_mimic_adapter():
+    """The MIMIC adapter pivots chartevents, converts °F→°C, and labels arrests."""
+    import pandas as pd
+
+    from vitals_data import VITALS, cohort_from_mimic
+
+    rows = []
+    for hour in range(4):
+        stamp = f"2020-01-01 0{hour}:00:00"
+        rows += [
+            {"stay_id": 10, "charttime": stamp, "itemid": 220045, "valuenum": 80 + hour},  # HR
+            {"stay_id": 10, "charttime": stamp, "itemid": 220179, "valuenum": 120},  # SBP
+            {"stay_id": 10, "charttime": stamp, "itemid": 220180, "valuenum": 75},  # DBP
+            {"stay_id": 10, "charttime": stamp, "itemid": 220277, "valuenum": 98},  # SpO2
+            {"stay_id": 10, "charttime": stamp, "itemid": 220210, "valuenum": 16},  # RR
+            {"stay_id": 10, "charttime": stamp, "itemid": 223761, "valuenum": 98.6},  # Temp °F -> 37.0 °C
+        ]
+    chartevents = pd.DataFrame(rows)
+    arrests = pd.DataFrame([{"stay_id": 10, "arrest_time": "2020-01-01 04:00:00"}])
+
+    cohort = cohort_from_mimic(chartevents, arrests)
+    assert list(cohort.vitals.columns) == ["patient_id", "hour", *VITALS]
+    assert cohort.vitals["pulse"].tolist() == [80, 81, 82, 83]
+    assert cohort.vitals["temperature"].round(1).tolist() == [37.0, 37.0, 37.0, 37.0]
+    arrest_hour = cohort.events.set_index("patient_id").loc["10", "arrest_hour"]
+    assert arrest_hour == pytest.approx(4.0)
+
+
+def test_cohort_from_mimic_controls_have_no_arrest():
+    """Stays absent from arrest_events become controls (the case-only fix)."""
+    import pandas as pd
+
+    from vitals_data import cohort_from_mimic
+
+    chartevents = pd.DataFrame(
+        [{"stay_id": 7, "charttime": "2020-01-01 00:00:00", "itemid": 220045, "valuenum": 75}]
+    )
+    cohort = cohort_from_mimic(chartevents, arrest_events=None)
+    assert cohort.events["arrest_hour"].isna().all()
+
+
+def test_add_personalized_baseline_features():
+    """Personalized deviation features are added and flag pre-arrest deterioration."""
+    from vitals_data import VITALS, add_personalized_features, build_windows, generate_synthetic_cohort
+
+    cohort = generate_synthetic_cohort(n_patients=150, seed=5)
+    windowed = build_windows(cohort)
+    personalized = add_personalized_features(windowed, cohort)
+
+    assert len(personalized.feature_names) == len(windowed.feature_names) + 2 * len(VITALS)
+    dev_cols = [c for c in personalized.feature_names if c.endswith("_dev")]
+    assert "pulse_last_dev" in dev_cols
+    assert not personalized.features[dev_cols].isna().any().any()
+
+    # Pre-arrest windows deviate further from personal baseline than stable ones.
+    y = personalized.labels.to_numpy()
+    assert personalized.features[y == 1]["pulse_last_dev"].mean() > personalized.features[y == 0]["pulse_last_dev"].mean()
+
+
 def test_case_only_cohort_all_arrest():
     """arrest_fraction=1.0 mirrors the competition's case-only cohort."""
     from vitals_data import generate_synthetic_cohort

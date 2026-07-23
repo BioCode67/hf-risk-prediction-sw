@@ -190,11 +190,19 @@ per vital + shock index) → predict an arrest within the next hour. Splitting i
 **patient-level** (no patient in both train and test), and missing values are
 imputed with train-set medians to avoid leakage.
 
-**Case-only design.** The competition cohort contains *only* patients who
-arrested, so there are no control patients. We label *within* each patient
-(stable early hours = negative, pre-arrest hours = positive) — see
-`build_windows`. This shapes how false alarms can be estimated and is discussed
-in the strategy doc.
+**Personalized baseline (the differentiator).** `add_personalized_features`
+adds, per vital, the window's deviation from *that patient's own* early-stable
+baseline. A value that is normal for the ward can be a large personal deviation —
+this personalizes the alarm and, on the synthetic demo, lifts AUPRC from ≈0.76 to
+≈0.84. It also turns the case-only cohort's within-patient structure into the
+method itself.
+
+**Data sources (one pipeline).** The same windowing/labelling runs on three
+sources via thin adapters: `generate_synthetic_cohort` (CI/demo, no data needed),
+`cohort_from_mimic` (real MIMIC-IV ICU data — supplies the *control* patients the
+competition cohort lacks, for honest false-alarm measurement), and
+`cohort_from_khth` (the 안심존 competition tables, labelled by the exact `CARDT`
+arrest time).
 
 **Why it matters.** On the synthetic demo, XGBoost and NEWS look near-identical
 on ROC-AUC (~0.99) yet diverge sharply on **AUPRC** (≈0.78 vs ≈0.61) — exactly
