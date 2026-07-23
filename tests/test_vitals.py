@@ -55,6 +55,31 @@ def test_cohort_from_khth_adapter():
     assert list(windowed.features.columns) == feature_names()
 
 
+def test_sanitize_vitals_drops_artifacts_and_fixes_fahrenheit():
+    """Sensor artefacts become NaN; Fahrenheit temps are converted to Celsius."""
+    import pandas as pd
+
+    from vitals_data import sanitize_vitals
+
+    df = pd.DataFrame(
+        {
+            "patient_id": ["a"] * 4,
+            "hour": [0, 1, 2, 3],
+            "pulse": [80, 0, 300, 90],  # 0 (disconnect) and 300 -> NaN
+            "sbp": [120, 120, 120, 120],
+            "dbp": [70, 70, 70, 70],
+            "temperature": [37.0, 99.0, 36.5, 20.0],  # 99 -> °F->°C ≈37.2; 20 (< 30) -> NaN
+            "spo2": [98, 29, 97, 96],  # 29 -> NaN
+            "resp_rate": [16, 16, 16, 16],
+        }
+    )
+    clean = sanitize_vitals(df)
+    assert pd.isna(clean["pulse"]).tolist() == [False, True, True, False]
+    assert pd.isna(clean["spo2"]).tolist() == [False, True, False, False]
+    assert clean["temperature"].iloc[1] == pytest.approx((99.0 - 32.0) * 5.0 / 9.0)  # ≈37.2 °C
+    assert pd.isna(clean["temperature"].iloc[3])  # 20 °C below plausible range
+
+
 def test_cohort_from_mimic_adapter():
     """The MIMIC adapter pivots chartevents, converts °F→°C, and labels arrests."""
     import pandas as pd

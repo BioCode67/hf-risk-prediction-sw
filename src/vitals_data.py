@@ -235,6 +235,41 @@ def generate_synthetic_cohort(
     )
 
 
+# --- Real-data sanitation (shared by every adapter) -----------------------
+
+# Physiologically plausible ranges; values outside are treated as missing.
+# Real monitors emit 0 / spikes on sensor disconnect — those are artefacts,
+# not low heart rates, so we null them (to be imputed) rather than trust them.
+PLAUSIBLE_RANGE: Final[dict[str, tuple[float, float]]] = {
+    "pulse": (20.0, 250.0),
+    "sbp": (40.0, 300.0),
+    "dbp": (20.0, 200.0),
+    "temperature": (30.0, 45.0),
+    "spo2": (50.0, 100.0),
+    "resp_rate": (3.0, 70.0),
+}
+
+
+def sanitize_vitals(vitals: pd.DataFrame, fix_temperature_units: bool = True) -> pd.DataFrame:
+    """Null out implausible vital values (sensor artefacts) and fix temperature units.
+
+    Real EHR/monitor data (MIMIC, and the competition's free-text ``VS_RSLT``)
+    contains disconnect artefacts (pulse/RR = 0), out-of-range spikes, and
+    temperatures charted in Fahrenheit under a Celsius label. We convert obvious
+    Fahrenheit temperatures (> 45) to Celsius, then set any value outside a
+    generous physiological range to ``NaN`` so it is imputed, not believed.
+    """
+    clean = vitals.copy()
+    if fix_temperature_units and "temperature" in clean.columns:
+        fahrenheit = clean["temperature"] > 45.0
+        clean.loc[fahrenheit, "temperature"] = (clean.loc[fahrenheit, "temperature"] - 32.0) * 5.0 / 9.0
+    for vital, (low, high) in PLAUSIBLE_RANGE.items():
+        if vital in clean.columns:
+            out_of_range = (clean[vital] < low) | (clean[vital] > high)
+            clean.loc[out_of_range, vital] = np.nan
+    return clean
+
+
 # --- KHTH adapter (real competition data) ---------------------------------
 
 
@@ -322,7 +357,7 @@ def cohort_from_khth(
     info["arrest_hour"] = (info["_arrest"] - info["_first"]) / pd.Timedelta(hours=1)
     events = info[["patient_id", "arrest_hour"]].copy()
 
-    return VitalSignsCohort(vitals=vitals_wide, events=events)
+    return VitalSignsCohort(vitals=sanitize_vitals(vitals_wide), events=events)
 
 
 # --- MIMIC-IV adapter (real-data development & controls) ------------------
@@ -403,7 +438,7 @@ def cohort_from_mimic(
         merged["arrest_hour"] = float("nan")  # every stay is a control
     cohort_events = merged[["patient_id", "arrest_hour"]].copy()
 
-    return VitalSignsCohort(vitals=vitals_wide, events=cohort_events)
+    return VitalSignsCohort(vitals=sanitize_vitals(vitals_wide), events=cohort_events)
 
 
 # --- Windowing & labelling ------------------------------------------------
