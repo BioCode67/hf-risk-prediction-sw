@@ -10,8 +10,9 @@ def _write_demo(root):
     icu = root / "icu"
     icu.mkdir()
     pd.DataFrame(
-        {"itemid": [220045, 220179, 220180, 220277, 220210, 223762, 999999],
-         "label": ["Heart Rate", "NBP systolic", "NBP diastolic", "SpO2", "Resp Rate", "Temp C", "Glucose"]}
+        {"itemid": [220045, 220179, 220180, 220277, 220210, 223762, 999999, 225466],
+         "label": ["Heart Rate", "NBP systolic", "NBP diastolic", "SpO2", "Resp Rate", "Temp C", "Glucose", "Cardiac Arrest"],
+         "linksto": ["chartevents"] * 7 + ["procedureevents"]}
     ).to_csv(icu / "d_items.csv", index=False)
     pd.DataFrame({"subject_id": [1], "stay_id": [30001], "intime": ["2150-01-01 00:00:00"]}).to_csv(
         icu / "icustays.csv", index=False
@@ -46,6 +47,29 @@ def test_vital_itemid_coverage_reports_labels(tmp_path):
     present = dict(zip(coverage["itemid"], coverage["mimic_label"]))
     assert present[220045] == "Heart Rate"
     assert present[220051] == "<absent>"  # DBP arterial line not in this tiny d_items
+
+
+def test_scan_arrest_items_finds_markers(tmp_path):
+    from mimic_explore import scan_arrest_items
+
+    found = scan_arrest_items(_write_demo(tmp_path))
+    assert 225466 in set(found["itemid"])  # 'Cardiac Arrest' matched
+    assert 220045 not in set(found["itemid"])  # 'Heart Rate' not an arrest marker
+
+
+def test_mimic_arrest_events_takes_earliest_per_stay(tmp_path):
+    from mimic_explore import mimic_arrest_events
+
+    events = pd.DataFrame(
+        {
+            "stay_id": [30001, 30001, 30002],
+            "charttime": ["2150-01-01 05:00:00", "2150-01-01 03:00:00", "2150-01-02 10:00:00"],
+            "itemid": [225466, 225466, 225466],
+        }
+    )
+    arrests = mimic_arrest_events(events, [225466])
+    assert dict(zip(arrests["stay_id"], arrests["arrest_time"].astype(str)))[30001] == "2150-01-01 03:00:00"
+    assert len(arrests) == 2
 
 
 def test_mimic_vitals_flow_into_cohort(tmp_path):
