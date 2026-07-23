@@ -33,18 +33,31 @@ platforms.
 ```
 heart-failure-risk-prediction/
 ├── src/
-│   ├── data_loader.py      # Load, preprocess, split, OMOP CDM mapping
-│   ├── train.py            # LightGBM/XGBoost + Optuna (AUPRC) training
-│   ├── explainability.py   # SHAP TreeExplainer (global + per-patient)
-│   └── main.py             # FastAPI server (/predict, /convert-omop)
+│   ├── data_loader.py      # [static] Load, preprocess, split, OMOP CDM mapping
+│   ├── train.py            # [static] LightGBM/XGBoost + Optuna (AUPRC) training
+│   ├── explainability.py   # [static] SHAP TreeExplainer (global + per-patient)
+│   ├── main.py             # [static] FastAPI server (/predict, /convert-omop)
+│   ├── vitals_data.py      # [time-series] synthetic cohort, sliding windows, patient split
+│   ├── vitals_train.py     # [time-series] XGBoost vs NEWS early-warning + false-alarm metrics
+│   └── vitals_explain.py   # [time-series] SHAP drivers for early-warning windows
 ├── tests/
-│   └── test_pipeline.py    # pytest unit & integration tests
+│   ├── test_pipeline.py    # static heart-failure pipeline tests
+│   └── test_vitals.py      # vital-sign early-warning tests (synthetic, always run)
+├── docs/
+│   └── competition-strategy.md  # K-Health 공모전 전략 & 제안서 설계
 ├── data/                   # Datasets (git-ignored)
 ├── models/                 # Trained artifacts (git-ignored)
 ├── requirements.txt
 ├── LICENSE                 # MIT
 └── README.md
 ```
+
+> This repository hosts **two complementary tracks**. The **static** track
+> (`data_loader`/`train`/`explainability`/`main`) predicts heart-failure risk
+> from one-shot clinical records. The **time-series** track (`vitals_*`) is the
+> cardiac-arrest early-warning system built for the *2026 K-Health 미개방
+> 의료데이터 경진대회* (경북대병원 활력징후 데이터) — see
+> [`docs/competition-strategy.md`](docs/competition-strategy.md).
 
 ---
 
@@ -154,6 +167,40 @@ pytest -q
 
 Covers data loading, preprocessing, stratified splitting, OMOP mapping,
 training utilities, SHAP explanations, and all FastAPI endpoints.
+
+---
+
+## Cardiac-Arrest Early Warning (time-series track)
+
+Vital-sign time-series pipeline for **in-hospital cardiac-arrest early warning**,
+the differentiator of which is **false-alarm reduction + explainability**, not
+raw accuracy. It runs end-to-end on a built-in **synthetic** cohort (no
+restricted data required); real `KHTH_PINFO`/`KHTH_VITAL` tables plug in through
+`vitals_data.cohort_from_khth`.
+
+```bash
+python src/vitals_data.py     # build synthetic cohort → windows → patient-level split
+python src/vitals_train.py    # train XGBoost, compare against the NEWS baseline
+python src/vitals_explain.py  # SHAP drivers + models/vitals_shap_summary.png
+```
+
+**Method.** Hourly vitals (pulse, systolic/diastolic BP, temperature, SpO₂,
+respiratory rate) → sliding-window features (mean/std/min/max/last/**slope**/delta
+per vital + shock index) → predict an arrest within the next hour. Splitting is
+**patient-level** (no patient in both train and test), and missing values are
+imputed with train-set medians to avoid leakage.
+
+**Case-only design.** The competition cohort contains *only* patients who
+arrested, so there are no control patients. We label *within* each patient
+(stable early hours = negative, pre-arrest hours = positive) — see
+`build_windows`. This shapes how false alarms can be estimated and is discussed
+in the strategy doc.
+
+**Why it matters.** On the synthetic demo, XGBoost and NEWS look near-identical
+on ROC-AUC (~0.99) yet diverge sharply on **AUPRC** (≈0.78 vs ≈0.61) — exactly
+the alarm-quality gap ROC-AUC hides. SHAP consistently ranks the **trends**
+(respiratory-rate, SpO₂ and pulse *slopes*) as the top risk drivers, validating
+the sliding-window trend features.
 
 ---
 

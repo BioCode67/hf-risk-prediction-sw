@@ -1,0 +1,471 @@
+"""Vital-sign time-series data for cardiac-arrest early warning.
+
+This module builds the *time-series* half of the project (distinct from the
+static heart-failure pipeline in ``data_loader.py``). It turns hourly vital-sign
+trajectories into sliding-window statistical features and labels each window by
+whether a cardiac arrest occurs within a short prediction horizon.
+
+Design notes grounded in the 2026 K-Health competition (경북대병원 활력징후):
+
+- The competition cohort (``KHTH_PINFO`` / ``KHTH_VITAL``) contains only patients
+  who suffered an in-hospital cardiac arrest and died — there are **no control
+  patients**. We therefore use a *within-patient* labelling scheme: early windows
+  of a patient are negatives, windows just before the arrest are positives. This
+  is a "case-only" temporal design; see ``build_windows``.
+- The analysis has to run inside an offline 안심존 (no internet, pre-declared
+  packages only), so this pipeline stays deliberately lightweight (numpy/pandas +
+  gradient boosting) and ships a synthetic generator so it runs end-to-end with
+  no restricted data. Real data plugs in via ``cohort_from_khth``.
+
+Vitals modelled (canonical names): pulse (맥박), sbp (수축기), dbp (이완기),
+temperature (체온), spo2 (산소포화도), resp_rate (호흡수).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+# --- Configuration --------------------------------------------------------
+
+VITALS: Final[tuple[str, ...]] = (
+    "pulse",
+    "sbp",
+    "dbp",
+    "temperature",
+    "spo2",
+    "resp_rate",
+)
+WINDOW_STATS: Final[tuple[str, ...]] = (
+    "mean",
+    "std",
+    "min",
+    "max",
+    "last",
+    "slope",
+    "delta",
+)
+DERIVED_FEATURES: Final[tuple[str, ...]] = ("shock_index_last", "pulse_pressure_last")
+
+# Sliding-window defaults: observe the past N hours, predict an arrest within the
+# next H hours. Step slides the window one hour at a time.
+OBSERVATION_WINDOW_HOURS: Final[int] = 8
+PREDICTION_HORIZON_HOURS: Final[int] = 1
+GAP_HOURS: Final[int] = 0
+STEP_HOURS: Final[int] = 1
+
+# Synthetic physiology (development only — NOT real patient data).
+# (mean, sd) for each patient's stable baseline.
+_HEALTHY_BASELINE: Final[dict[str, tuple[float, float]]] = {
+    "pulse": (78.0, 8.0),
+    "sbp": (122.0, 12.0),
+    "dbp": (76.0, 8.0),
+    "temperature": (36.8, 0.3),
+    "spo2": (97.5, 1.0),
+    "resp_rate": (16.0, 2.0),
+}
+# Total shift applied at the moment of arrest (deterioration trajectory).
+_DETERIORATION: Final[dict[str, float]] = {
+    "pulse": 45.0,
+    "sbp": -38.0,
+    "dbp": -22.0,
+    "temperature": -0.6,
+    "spo2": -14.0,
+    "resp_rate": 16.0,
+}
+_NOISE_SD: Final[dict[str, float]] = {
+    "pulse": 4.0,
+    "sbp": 6.0,
+    "dbp": 4.0,
+    "temperature": 0.2,
+    "spo2": 0.6,
+    "resp_rate": 1.2,
+}
+_CLIP_RANGE: Final[dict[str, tuple[float, float]]] = {
+    "pulse": (30.0, 200.0),
+    "sbp": (50.0, 240.0),
+    "dbp": (30.0, 140.0),
+    "temperature": (33.0, 42.0),
+    "spo2": (60.0, 100.0),
+    "resp_rate": (4.0, 50.0),
+}
+
+
+def feature_names() -> list[str]:
+    """Return the ordered feature-column names produced per window."""
+    names = [f"{vital}_{stat}" for vital in VITALS for stat in WINDOW_STATS]
+    names += list(DERIVED_FEATURES)
+    return names
+
+
+@dataclass
+class VitalSignsCohort:
+    """A cohort of hourly vital-sign trajectories plus per-patient arrest times.
+
+    Attributes:
+        vitals: Long-per-hour frame with columns ``patient_id``, ``hour`` and one
+            column per entry in :data:`VITALS`.
+        events: One row per patient with ``patient_id`` and ``arrest_hour``
+            (``NaN`` for patients who never arrest — i.e. controls).
+    """
+
+    vitals: pd.DataFrame
+    events: pd.DataFrame
+
+
+@dataclass
+class WindowedDataset:
+    """Sliding-window feature matrix, labels and patient grouping."""
+
+    features: pd.DataFrame
+    labels: pd.Series
+    groups: pd.Series
+    feature_names: list[str]
+
+
+@dataclass
+class PatientSplit:
+    """Patient-level train/test split (no patient appears in both sets)."""
+
+    X_train: pd.DataFrame
+    X_test: pd.DataFrame
+    y_train: np.ndarray
+    y_test: np.ndarray
+    groups_train: np.ndarray
+    groups_test: np.ndarray
+    feature_names: list[str]
+    imputation_medians: pd.Series
+
+
+# --- Synthetic cohort -----------------------------------------------------
+
+
+def generate_synthetic_cohort(
+    n_patients: int = 500,
+    arrest_fraction: float = 0.5,
+    seed: int = 42,
+    min_stay_hours: int = 24,
+    max_stay_hours: int = 96,
+    deterioration_ramp_hours: int = 6,
+    missing_rate: float = 0.1,
+) -> VitalSignsCohort:
+    """Generate a synthetic vital-sign cohort for development and testing.
+
+    This is **not** real patient data. Arrest patients follow a monotonic
+    deterioration trajectory (rising pulse/resp_rate, falling spo2/blood
+    pressure) over the ``deterioration_ramp_hours`` before the event, with
+    physiological noise and random missingness.
+
+    Set ``arrest_fraction=1.0`` to mirror the competition's *case-only* cohort
+    (every patient arrests); lower values add control patients, which is useful
+    for false-alarm estimation during development with external data.
+
+    Args:
+        n_patients: Number of synthetic patients.
+        arrest_fraction: Fraction of patients who arrest (1.0 = case-only).
+        seed: RNG seed for reproducibility.
+        min_stay_hours: Minimum recorded hours per patient.
+        max_stay_hours: Maximum recorded hours per patient.
+        deterioration_ramp_hours: Hours of deterioration before arrest.
+        missing_rate: Per-measurement probability of a missing value.
+
+    Returns:
+        A :class:`VitalSignsCohort`.
+    """
+    rng = np.random.default_rng(seed)
+    vital_rows: list[dict[str, float]] = []
+    event_rows: list[dict[str, float]] = []
+    # Earliest arrest hour that still leaves room for stable history + ramp.
+    earliest_arrest = deterioration_ramp_hours + OBSERVATION_WINDOW_HOURS + 2
+
+    for patient_id in range(1, n_patients + 1):
+        stay = int(rng.integers(min_stay_hours, max_stay_hours + 1))
+        is_arrest = rng.random() < arrest_fraction
+        baseline = {v: float(rng.normal(*_HEALTHY_BASELINE[v])) for v in VITALS}
+        # Per-patient deterioration severity: some patients crash hard, others
+        # decompensate subtly — this is what makes early warning genuinely hard.
+        severity = float(rng.uniform(0.45, 1.1))
+
+        if is_arrest:
+            if stay <= earliest_arrest:
+                stay = earliest_arrest + int(rng.integers(2, 12))
+            arrest_hour = int(rng.integers(earliest_arrest, stay))
+            recorded_hours = arrest_hour  # vitals recorded up to (but not at) arrest
+        else:
+            arrest_hour = None
+            recorded_hours = stay
+
+        for hour in range(recorded_hours):
+            if is_arrest:
+                hours_to_arrest = arrest_hour - hour
+                frac = (
+                    0.0
+                    if hours_to_arrest > deterioration_ramp_hours
+                    else (deterioration_ramp_hours - hours_to_arrest) / deterioration_ramp_hours
+                )
+                frac = float(np.clip(frac, 0.0, 1.0))
+            else:
+                frac = 0.0
+
+            row: dict[str, float] = {"patient_id": patient_id, "hour": hour}
+            for vital in VITALS:
+                value = baseline[vital] + _DETERIORATION[vital] * frac * severity + rng.normal(0, _NOISE_SD[vital])
+                low, high = _CLIP_RANGE[vital]
+                value = float(np.clip(value, low, high))
+                if rng.random() < missing_rate:
+                    value = float("nan")
+                row[vital] = value
+            vital_rows.append(row)
+
+        event_rows.append(
+            {
+                "patient_id": patient_id,
+                "arrest_hour": float(arrest_hour) if arrest_hour is not None else float("nan"),
+            }
+        )
+
+    return VitalSignsCohort(
+        vitals=pd.DataFrame(vital_rows),
+        events=pd.DataFrame(event_rows),
+    )
+
+
+# --- KHTH adapter (real competition data) ---------------------------------
+
+
+def cohort_from_khth(
+    vital: pd.DataFrame,
+    pinfo: pd.DataFrame | None = None,
+    *,
+    patient_col: str = "PID",
+    time_col: str = "MEAS_DTM",
+    column_map: dict[str, str] | None = None,
+    arrest_time_col: str | None = None,
+) -> VitalSignsCohort:
+    """Adapt ``KHTH_VITAL`` / ``KHTH_PINFO`` tables to a :class:`VitalSignsCohort`.
+
+    Exact column names/units come from the competition's data dictionary
+    (``데이터 설명서``); pass them via ``column_map`` (source -> canonical
+    :data:`VITALS` name), ``patient_col`` and ``time_col``. Measurement
+    timestamps are bucketed to integer hours from each patient's first record.
+
+    Arrest time: if ``arrest_time_col`` (in ``pinfo``) is given it is used;
+    otherwise the cohort is treated as *case-only* and the arrest is placed one
+    hour after each patient's last recorded vital (every patient arrested).
+
+    This function is intentionally thin — it is the single point that binds to
+    the real schema, so the rest of the pipeline stays data-agnostic.
+    """
+    column_map = column_map or {v: v for v in VITALS}
+    df = vital.rename(columns={src: dst for src, dst in column_map.items()})
+    df = df.rename(columns={patient_col: "patient_id", time_col: "_time"})
+
+    df["_time"] = pd.to_datetime(df["_time"])
+    first = df.groupby("patient_id")["_time"].transform("min")
+    df["hour"] = ((df["_time"] - first).dt.total_seconds() // 3600).astype(int)
+
+    keep = ["patient_id", "hour", *VITALS]
+    for vital_name in VITALS:
+        if vital_name not in df.columns:
+            df[vital_name] = np.nan
+    vitals = df[keep].groupby(["patient_id", "hour"], as_index=False).mean(numeric_only=True)
+
+    if arrest_time_col and pinfo is not None:
+        info = pinfo.rename(columns={patient_col: "patient_id"}).copy()
+        info["_arrest"] = pd.to_datetime(info[arrest_time_col])
+        info = info.merge(
+            df.groupby("patient_id")["_time"].min().rename("_first"),
+            on="patient_id",
+            how="left",
+        )
+        info["arrest_hour"] = ((info["_arrest"] - info["_first"]).dt.total_seconds() // 3600).astype(float)
+        events = info[["patient_id", "arrest_hour"]]
+    else:
+        # Case-only: arrest one hour after the last recorded observation.
+        last_hour = vitals.groupby("patient_id")["hour"].max()
+        events = (last_hour + 1).rename("arrest_hour").reset_index()
+
+    return VitalSignsCohort(vitals=vitals, events=events)
+
+
+# --- Windowing & labelling ------------------------------------------------
+
+
+def _window_features(observation: pd.DataFrame) -> dict[str, float]:
+    """Compute per-vital statistics for a single observation window."""
+    feats: dict[str, float] = {}
+    hours = observation["hour"].to_numpy(dtype=float)
+
+    for vital in VITALS:
+        values = observation[vital].to_numpy(dtype=float)
+        mask = ~np.isnan(values)
+        if not mask.any():
+            for stat in WINDOW_STATS:
+                feats[f"{vital}_{stat}"] = float("nan")
+            continue
+
+        present = values[mask]
+        present_hours = hours[mask]
+        feats[f"{vital}_mean"] = float(present.mean())
+        feats[f"{vital}_std"] = float(present.std())  # population std (ddof=0)
+        feats[f"{vital}_min"] = float(present.min())
+        feats[f"{vital}_max"] = float(present.max())
+        feats[f"{vital}_last"] = float(present[-1])
+        feats[f"{vital}_delta"] = float(present[-1] - present[0])
+        if present.size >= 2 and np.ptp(present_hours) > 0:
+            feats[f"{vital}_slope"] = float(np.polyfit(present_hours, present, 1)[0])
+        else:
+            feats[f"{vital}_slope"] = 0.0
+
+    pulse_last = feats.get("pulse_last", float("nan"))
+    sbp_last = feats.get("sbp_last", float("nan"))
+    dbp_last = feats.get("dbp_last", float("nan"))
+    feats["shock_index_last"] = (
+        float(pulse_last / sbp_last)
+        if np.isfinite(pulse_last) and np.isfinite(sbp_last) and sbp_last != 0
+        else float("nan")
+    )
+    feats["pulse_pressure_last"] = (
+        float(sbp_last - dbp_last) if np.isfinite(sbp_last) and np.isfinite(dbp_last) else float("nan")
+    )
+
+    return {name: feats.get(name, float("nan")) for name in feature_names()}
+
+
+def build_windows(
+    cohort: VitalSignsCohort,
+    observation_window_hours: int = OBSERVATION_WINDOW_HOURS,
+    prediction_horizon_hours: int = PREDICTION_HORIZON_HOURS,
+    gap_hours: int = GAP_HOURS,
+    step_hours: int = STEP_HOURS,
+    min_valid_fraction: float = 0.5,
+) -> WindowedDataset:
+    """Slide a window over each patient and label by imminent arrest.
+
+    A window ending at hour ``t`` uses observations in ``[t - W + 1, t]`` and is
+    labelled positive when an arrest falls in ``(t + gap, t + gap + horizon]``.
+    Windows with fewer than ``min_valid_fraction`` of hours present are skipped.
+
+    Because the competition cohort is case-only, positives come from the hours
+    just before each patient's arrest and negatives from that same patient's
+    earlier, more stable hours (plus any control patients present).
+    """
+    events = dict(zip(cohort.events["patient_id"], cohort.events["arrest_hour"]))
+    names = feature_names()
+    min_rows = max(2, int(np.ceil(min_valid_fraction * observation_window_hours)))
+
+    rows: list[dict[str, float]] = []
+    labels: list[int] = []
+    groups: list[int] = []
+
+    for patient_id, group in cohort.vitals.groupby("patient_id"):
+        group = group.sort_values("hour")
+        arrest_hour = events.get(patient_id, float("nan"))
+        has_arrest = arrest_hour is not None and np.isfinite(arrest_hour)
+        max_hour = int(group["hour"].max())
+
+        for end in range(observation_window_hours - 1, max_hour + 1, step_hours):
+            if has_arrest and end >= arrest_hour:
+                continue  # cannot observe at/after the arrest
+            low = end - observation_window_hours + 1
+            observation = group[(group["hour"] >= low) & (group["hour"] <= end)]
+            if len(observation) < min_rows:
+                continue
+
+            if has_arrest and (end + gap_hours) < arrest_hour <= (end + gap_hours + prediction_horizon_hours):
+                label = 1
+            else:
+                label = 0
+
+            rows.append(_window_features(observation))
+            labels.append(label)
+            groups.append(int(patient_id))
+
+    features = pd.DataFrame(rows, columns=names)
+    return WindowedDataset(
+        features=features,
+        labels=pd.Series(labels, name="label"),
+        groups=pd.Series(groups, name="patient_id"),
+        feature_names=names,
+    )
+
+
+def patient_level_split(
+    windowed: WindowedDataset,
+    test_size: float = 0.2,
+    seed: int = 42,
+) -> PatientSplit:
+    """Split windows by patient so no patient leaks across train/test.
+
+    Patients are stratified by whether they contribute any positive window.
+    Missing feature values are imputed with **train** medians (fit on train,
+    applied to test) to avoid leakage.
+    """
+    groups = windowed.groups
+    patients = np.array(sorted(groups.unique()))
+    positive_patients = windowed.labels.groupby(groups).max().reindex(patients).fillna(0).astype(int)
+    stratify = positive_patients.to_numpy() if positive_patients.nunique() > 1 else None
+
+    train_patients, test_patients = train_test_split(
+        patients,
+        test_size=test_size,
+        random_state=seed,
+        stratify=stratify,
+    )
+
+    train_mask = groups.isin(train_patients).to_numpy()
+    test_mask = groups.isin(test_patients).to_numpy()
+
+    X_train = windowed.features[train_mask].reset_index(drop=True)
+    X_test = windowed.features[test_mask].reset_index(drop=True)
+    y_train = windowed.labels[train_mask].to_numpy()
+    y_test = windowed.labels[test_mask].to_numpy()
+
+    medians = X_train.median(numeric_only=True)
+    X_train = X_train.fillna(medians).fillna(0.0)
+    X_test = X_test.fillna(medians).fillna(0.0)
+
+    return PatientSplit(
+        X_train=X_train,
+        X_test=X_test,
+        y_train=y_train,
+        y_test=y_test,
+        groups_train=groups[train_mask].to_numpy(),
+        groups_test=groups[test_mask].to_numpy(),
+        feature_names=windowed.feature_names,
+        imputation_medians=medians,
+    )
+
+
+def _class_summary(labels: np.ndarray, name: str) -> str:
+    """Format a positive-class prevalence summary."""
+    total = len(labels)
+    positives = int(np.sum(labels == 1))
+    pct = 100.0 * positives / total if total else 0.0
+    return f"{name}: n={total}, positives={positives} ({pct:.2f}%)"
+
+
+def main() -> None:
+    """Build a synthetic cohort and report window/split statistics."""
+    cohort = generate_synthetic_cohort(n_patients=500, arrest_fraction=0.5)
+    n_arrest = int(cohort.events["arrest_hour"].notna().sum())
+    print(f"Cohort: {len(cohort.events)} patients ({n_arrest} arrest), {len(cohort.vitals)} hourly rows")
+
+    windowed = build_windows(cohort)
+    print(f"Windows: {len(windowed.features)} x {len(windowed.feature_names)} features")
+    print(_class_summary(windowed.labels.to_numpy(), "All windows"))
+
+    split = patient_level_split(windowed)
+    overlap = set(split.groups_train) & set(split.groups_test)
+    print(f"Patient-level split — train/test patient overlap: {len(overlap)} (must be 0)")
+    print(_class_summary(split.y_train, "Train"))
+    print(_class_summary(split.y_test, "Test"))
+
+
+if __name__ == "__main__":
+    main()

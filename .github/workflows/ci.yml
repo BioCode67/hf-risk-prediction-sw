@@ -32,7 +32,7 @@ jobs:
 
       - name: Verify all modules import
         run: |
-          python -c "import sys; sys.path.insert(0, 'src'); import data_loader, train, explainability, main; print('all modules import OK')"
+          python -c "import sys; sys.path.insert(0, 'src'); import data_loader, train, explainability, main, vitals_data, vitals_train, vitals_explain; print('all modules import OK')"
 
       - name: Run tests
         # Data-dependent tests skip automatically when the git-ignored

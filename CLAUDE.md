@@ -33,13 +33,31 @@ them on first use):
 ## Layout
 
 ```
+# static heart-failure track (one row per patient)
 src/data_loader.py    # load/unzip, StandardScaler, stratified split, to_omop_cdm()
 src/train.py          # LightGBM (Optuna, AUPRC) + XGBoost baseline -> models/best_model.pkl
 src/explainability.py # SHAP TreeExplainer: global top-5 + per-patient top-3
 src/main.py           # FastAPI app: /predict, /convert-omop, /health
-tests/                # conftest.py (fixtures) + test_pipeline.py
+
+# time-series cardiac-arrest early-warning track (K-Health 공모전)
+src/vitals_data.py    # synthetic cohort + KHTH adapter, sliding windows, patient-level split
+src/vitals_train.py   # cost-sensitive XGBoost vs NEWS baseline, false-alarm metrics
+src/vitals_explain.py # SHAP drivers (global + per-window) for early-warning
+
+docs/competition-strategy.md  # 공모전 우승 전략 & 제안서 설계 (rubric 정렬)
+tests/                # conftest.py + test_pipeline.py (static) + test_vitals.py (time-series)
 .github/workflows/ci.yml  # imports check + pytest on Python 3.11 & 3.12
 ```
+
+Two independent pipelines share the repo. The **time-series track** is the
+2026 K-Health 미개방 의료데이터 경진대회 entry (경북대병원 활력징후 →
+in-hospital cardiac-arrest early warning). It is **case-only** (arrest patients
+only, no controls) so labelling is *within-patient*; it ships a synthetic
+generator so it runs with no restricted data, and real `KHTH_PINFO`/`KHTH_VITAL`
+plug in via `vitals_data.cohort_from_khth`. Keep it lightweight
+(numpy/pandas/sklearn/xgboost/shap only) — the 안심존 is an offline closed
+network with pre-declared packages. `tests/test_vitals.py` uses synthetic data
+so it always runs (it does not skip like the data-dependent static tests).
 
 ## Commands
 
@@ -75,5 +93,10 @@ pytest -q                                  # test suite
 
 ## Status (as of 2026-07-23)
 
-Pipeline built, verified end-to-end (13 tests pass, live server smoke-tested),
-and pushed to `origin/main`. CI is green on Python 3.11 and 3.12.
+- **Static heart-failure track**: built, verified end-to-end (13 tests pass,
+  live server smoke-tested), pushed to `origin/main`. CI green on 3.11 & 3.12.
+- **Time-series early-warning track**: `vitals_*` modules + `test_vitals.py`
+  (11 tests) added on branch `claude/cardiac-arrest-early-warning-07fq9e`.
+  Runs end-to-end on synthetic data; demo shows XGBoost beating the NEWS
+  baseline on AUPRC while ROC-AUC is near-identical. Next: wire real KHTH
+  schema from the competition data dictionary into `cohort_from_khth`.
