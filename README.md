@@ -1,5 +1,9 @@
 # Heart Failure Risk Prediction & False Alarm Reduction
 
+[![CI](https://github.com/BioCode67/hf-risk-prediction-sw/actions/workflows/ci.yml/badge.svg)](https://github.com/BioCode67/hf-risk-prediction-sw/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 An end-to-end machine learning and FastAPI backend pipeline for **acute heart
 failure risk prediction**, optimized to **reduce false alarms** in clinical
 monitoring settings. The project pairs a cost-sensitive gradient-boosted model
