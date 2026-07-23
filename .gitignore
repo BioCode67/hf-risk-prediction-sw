@@ -1,0 +1,45 @@
+# ---- Project data & artifacts (never commit PHI or large binaries) ----
+data/*
+*.zip
+*.csv
+models/*.pkl
+!data/.gitkeep
+
+# Model side-artifacts
+models/*.png
+models/*.json
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+.env
+env.bak/
+venv.bak/
+
+# ---- Testing / tooling caches ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.optuna/
+
+# ---- Editors / OS ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
