@@ -238,59 +238,91 @@ def generate_synthetic_cohort(
 # --- KHTH adapter (real competition data) ---------------------------------
 
 
+# Maps the competition's ``VS_GBN`` codes to this module's canonical vitals.
+_KHTH_VS_TYPE_MAP: Final[dict[str, str]] = {
+    "HR": "pulse",
+    "SBP": "sbp",
+    "DBP": "dbp",
+    "BT": "temperature",
+    "SPO2": "spo2",
+    "RR": "resp_rate",
+}
+# KHTH datetime columns are strings formatted YYYYMMDDHHMI (minute precision).
+_KHTH_DATETIME_FMT: Final[str] = "%Y%m%d%H%M"
+
+
+def _parse_khth_datetime(series: pd.Series) -> pd.Series:
+    """Parse a KHTH ``YYYYMMDDHHMI`` string column to datetimes."""
+    return pd.to_datetime(series.astype(str).str.strip(), format=_KHTH_DATETIME_FMT, errors="coerce")
+
+
 def cohort_from_khth(
     vital: pd.DataFrame,
-    pinfo: pd.DataFrame | None = None,
+    pinfo: pd.DataFrame,
     *,
-    patient_col: str = "PID",
-    time_col: str = "MEAS_DTM",
-    column_map: dict[str, str] | None = None,
-    arrest_time_col: str | None = None,
+    patient_col: str = "PATID",
+    admit_col: str = "INDD",
+    time_col: str = "VSDT",
+    type_col: str = "VS_GBN",
+    value_col: str = "VS_RSLT",
+    arrest_col: str = "CARDT",
+    bucket_hours: int = 1,
+    vs_type_map: dict[str, str] | None = None,
 ) -> VitalSignsCohort:
-    """Adapt ``KHTH_VITAL`` / ``KHTH_PINFO`` tables to a :class:`VitalSignsCohort`.
+    """Adapt the real ``KHTH_VITAL`` / ``KHTH_PINFO`` tables to a cohort.
 
-    Exact column names/units come from the competition's data dictionary
-    (``데이터 설명서``); pass them via ``column_map`` (source -> canonical
-    :data:`VITALS` name), ``patient_col`` and ``time_col``. Measurement
-    timestamps are bucketed to integer hours from each patient's first record.
+    Schema (경북대병원 활력징후 데이터 설명서):
 
-    Arrest time: if ``arrest_time_col`` (in ``pinfo``) is given it is used;
-    otherwise the cohort is treated as *case-only* and the arrest is placed one
-    hour after each patient's last recorded vital (every patient arrested).
+    - ``KHTH_VITAL`` is **long**: one row per measurement with ``VS_GBN`` (the
+      vital code: HR/SBP/DBP/BT/SPO2/RR) and ``VS_RSLT`` (its value), timestamped
+      by ``VSDT`` (``YYYYMMDDHHMI``). Rows join to ``KHTH_PINFO`` on
+      ``PATID`` + ``INDD`` (a patient may have several admissions).
+    - ``KHTH_PINFO`` provides the exact arrest time ``CARDT`` per stay, so labels
+      are anchored to the true event — not inferred from the record's end.
 
-    This function is intentionally thin — it is the single point that binds to
-    the real schema, so the rest of the pipeline stays data-agnostic.
+    Each ``(PATID, INDD)`` admission becomes one ``patient_id``. Measurements are
+    pivoted long→wide and bucketed to ``bucket_hours``-hour bins (default hourly;
+    native sampling is ~minutes and irregular). Values are coerced to numeric.
+
+    This is the single point binding to the real schema — the rest of the
+    pipeline stays data-agnostic.
     """
-    column_map = column_map or {v: v for v in VITALS}
-    df = vital.rename(columns={src: dst for src, dst in column_map.items()})
-    df = df.rename(columns={patient_col: "patient_id", time_col: "_time"})
+    vs_type_map = vs_type_map or _KHTH_VS_TYPE_MAP
 
-    df["_time"] = pd.to_datetime(df["_time"])
-    first = df.groupby("patient_id")["_time"].transform("min")
-    df["hour"] = ((df["_time"] - first).dt.total_seconds() // 3600).astype(int)
+    records = vital.copy()
+    records["patient_id"] = records[patient_col].astype(str) + "_" + records[admit_col].astype(str)
+    records["_dt"] = _parse_khth_datetime(records[time_col])
+    records["_canonical"] = records[type_col].map(vs_type_map)
+    records["_value"] = pd.to_numeric(records[value_col], errors="coerce")
+    records = records.dropna(subset=["_dt", "_canonical"])
 
-    keep = ["patient_id", "hour", *VITALS]
+    first_dt = records.groupby("patient_id")["_dt"].transform("min")
+    bucket = pd.Timedelta(hours=bucket_hours)
+    records["hour"] = (((records["_dt"] - first_dt) // bucket).astype(int) * bucket_hours)
+
+    wide = records.pivot_table(
+        index=["patient_id", "hour"],
+        columns="_canonical",
+        values="_value",
+        aggfunc="mean",
+    ).reset_index()
+    wide.columns.name = None
     for vital_name in VITALS:
-        if vital_name not in df.columns:
-            df[vital_name] = np.nan
-    vitals = df[keep].groupby(["patient_id", "hour"], as_index=False).mean(numeric_only=True)
+        if vital_name not in wide.columns:
+            wide[vital_name] = np.nan
+    vitals_wide = (
+        wide[["patient_id", "hour", *VITALS]].sort_values(["patient_id", "hour"]).reset_index(drop=True)
+    )
 
-    if arrest_time_col and pinfo is not None:
-        info = pinfo.rename(columns={patient_col: "patient_id"}).copy()
-        info["_arrest"] = pd.to_datetime(info[arrest_time_col])
-        info = info.merge(
-            df.groupby("patient_id")["_time"].min().rename("_first"),
-            on="patient_id",
-            how="left",
-        )
-        info["arrest_hour"] = ((info["_arrest"] - info["_first"]).dt.total_seconds() // 3600).astype(float)
-        events = info[["patient_id", "arrest_hour"]]
-    else:
-        # Case-only: arrest one hour after the last recorded observation.
-        last_hour = vitals.groupby("patient_id")["hour"].max()
-        events = (last_hour + 1).rename("arrest_hour").reset_index()
+    stay_first_dt = records.groupby("patient_id")["_dt"].min().rename("_first").reset_index()
+    info = pinfo.copy()
+    info["patient_id"] = info[patient_col].astype(str) + "_" + info[admit_col].astype(str)
+    info["_arrest"] = _parse_khth_datetime(info[arrest_col])
+    info = stay_first_dt.merge(info[["patient_id", "_arrest"]], on="patient_id", how="left")
+    info["arrest_hour"] = (info["_arrest"] - info["_first"]) / pd.Timedelta(hours=1)
+    events = info[["patient_id", "arrest_hour"]].copy()
 
-    return VitalSignsCohort(vitals=vitals, events=events)
+    return VitalSignsCohort(vitals=vitals_wide, events=events)
 
 
 # --- Windowing & labelling ------------------------------------------------
@@ -384,7 +416,7 @@ def build_windows(
 
             rows.append(_window_features(observation))
             labels.append(label)
-            groups.append(int(patient_id))
+            groups.append(patient_id)
 
     features = pd.DataFrame(rows, columns=names)
     return WindowedDataset(

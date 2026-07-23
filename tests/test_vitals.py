@@ -26,6 +26,35 @@ def test_synthetic_cohort_has_cases_and_controls():
     assert (~arrest).sum() > 0
 
 
+def test_cohort_from_khth_adapter():
+    """The KHTH adapter pivots long vitals and anchors labels to CARDT."""
+    import pandas as pd
+
+    from vitals_data import VITALS, build_windows, cohort_from_khth, feature_names
+
+    # First measurement 08:00, arrest (CARDT) at 12:00 -> arrest_hour == 4.
+    times = ["202301010800", "202301010900", "202301011000", "202301011100"]
+    rows = []
+    for i, stamp in enumerate(times):
+        for code, value in [("HR", 80 + i), ("SBP", 120), ("DBP", 75), ("BT", 36.5), ("SPO2", 98), ("RR", 16)]:
+            rows.append({"PATID": "0001", "INDD": "20230101", "VSDT": stamp, "VS_GBN": code, "VS_RSLT": str(value)})
+    vital = pd.DataFrame(rows)
+    pinfo = pd.DataFrame(
+        [{"PATID": "0001", "INDD": "20230101", "AGE": 40, "SEX": "M", "CARDT": "202301011200"}]
+    )
+
+    cohort = cohort_from_khth(vital, pinfo)
+    assert list(cohort.vitals.columns) == ["patient_id", "hour", *VITALS]
+    assert cohort.vitals["hour"].tolist() == [0, 1, 2, 3]
+    assert cohort.vitals["pulse"].tolist() == [80, 81, 82, 83]  # long->wide pivot of HR
+    arrest_hour = cohort.events.set_index("patient_id").loc["0001_20230101", "arrest_hour"]
+    assert arrest_hour == pytest.approx(4.0)
+
+    # The adapted cohort flows through the rest of the pipeline unchanged.
+    windowed = build_windows(cohort, observation_window_hours=2, min_valid_fraction=0.5)
+    assert list(windowed.features.columns) == feature_names()
+
+
 def test_case_only_cohort_all_arrest():
     """arrest_fraction=1.0 mirrors the competition's case-only cohort."""
     from vitals_data import generate_synthetic_cohort
