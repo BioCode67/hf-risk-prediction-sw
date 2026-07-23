@@ -39,13 +39,19 @@ src/train.py          # LightGBM (Optuna, AUPRC) + XGBoost baseline -> models/be
 src/explainability.py # SHAP TreeExplainer: global top-5 + per-patient top-3
 src/main.py           # FastAPI app: /predict, /convert-omop, /health
 
-# time-series cardiac-arrest early-warning track (K-Health 공모전)
-src/vitals_data.py    # synthetic cohort + KHTH adapter, sliding windows, patient-level split
-src/vitals_train.py   # cost-sensitive XGBoost vs NEWS baseline, false-alarm metrics
-src/vitals_explain.py # SHAP drivers (global + per-window) for early-warning
+# time-series cardiac-arrest early-warning track (K-Health 공모전) — the active entry
+src/vitals_data.py     # synthetic + KHTH + MIMIC adapters, sanitation, windows, personalized
+                       #   + static(age/sex) features, patient-level split, lead-time
+src/vitals_train.py    # cost-sensitive XGBoost vs NEWS; AUPRC/sens@spec/alarm-burden/lead-time
+src/vitals_explain.py  # SHAP drivers (global + per-window)
+src/vitals_report.py   # figures: PR-curve, trajectory, lead-time, alarm-burden (render_report)
+src/vitals_phenotype.py# unsupervised cardiac-arrest phenotype clustering + heatmap
+src/mimic_explore.py   # real MIMIC-IV: explore + --scan-arrest/--arrest-counts/--model
+src/omop_explore.py    # explore any OMOP CDM CSV folder (Eunomia / competition sample)
 
 docs/competition-strategy.md  # 공모전 우승 전략 & 제안서 설계 (rubric 정렬)
-tests/                # conftest.py + test_pipeline.py (static) + test_vitals.py (time-series)
+docs/proposal-draft.md        # 예선 제안서 30장 골격 초안
+tests/  # test_pipeline.py (static) + test_vitals/_mimic/_omop/_report.py (time-series)
 .github/workflows/ci.yml  # imports check + pytest on Python 3.11 & 3.12
 ```
 
@@ -95,8 +101,12 @@ pytest -q                                  # test suite
 
 - **Static heart-failure track**: built, verified end-to-end (13 tests pass,
   live server smoke-tested), pushed to `origin/main`. CI green on 3.11 & 3.12.
-- **Time-series early-warning track**: `vitals_*` modules + `test_vitals.py`
-  (11 tests) added on branch `claude/cardiac-arrest-early-warning-07fq9e`.
-  Runs end-to-end on synthetic data; demo shows XGBoost beating the NEWS
-  baseline on AUPRC while ROC-AUC is near-identical. Next: wire real KHTH
-  schema from the competition data dictionary into `cohort_from_khth`.
+- **Time-series early-warning track** (the K-Health competition entry, branch
+  `claude/cardiac-arrest-early-warning-07fq9e`): full pipeline on synthetic /
+  MIMIC-IV / KHTH — sanitation, sliding windows, personalized-baseline + age/sex
+  features, XGBoost vs NEWS with AUPRC / sensitivity@specificity / **alarm burden
+  at matched sensitivity** / **lead-time**, SHAP, a figure set (`vitals_report`)
+  and **cardiac-arrest phenotype clustering** (`vitals_phenotype`). `mimic_explore
+  --model` runs the whole thing on real MIMIC-IV in one command (arrest =
+  procedureevents 225466). 40 tests pass. Docs: `competition-strategy.md`,
+  `proposal-draft.md`. Remaining gate: full MIMIC-IV (CITI) for real positives.
