@@ -15,11 +15,18 @@ if str(SRC_DIR) not in sys.path:
 
 @pytest.fixture(scope="session")
 def loader():
-    """Session-scoped data loader pointed at the repository data directory."""
+    """Session-scoped data loader pointed at the repository data directory.
+
+    Skips dependent tests when the source datasets are not present (e.g. in CI,
+    where the git-ignored ``data/`` archives are unavailable).
+    """
     from data_loader import HeartFailureDataLoader
 
     instance = HeartFailureDataLoader(data_dir=PROJECT_ROOT / "data")
-    instance.load_raw_data()
+    try:
+        instance.load_raw_data()
+    except FileNotFoundError as exc:
+        pytest.skip(f"Source datasets unavailable in data/: {exc}")
     return instance
 
 
