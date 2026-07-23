@@ -133,34 +133,20 @@ def plot_lead_time_distribution(lead_times: list[float], output_path: str | Path
     return output
 
 
-def generate_report(output_dir: str | Path = "models", n_patients: int = 500, seed: int = 42) -> dict[str, Any]:
-    """Train on a synthetic cohort and render the full figure set.
+def render_report(split: Any, model: Any, cohort: Any, out_dir: str | Path) -> dict[str, Any]:
+    """Render the full figure set + metrics from a trained split/model/cohort.
 
-    Runs end-to-end with no external data; on real data, pass the trained model /
-    split into the individual ``plot_*`` functions instead.
+    Shared by the synthetic demo and the real MIMIC-IV run so both produce an
+    identical report from any data source.
     """
-    from vitals_data import add_personalized_features, build_windows, generate_synthetic_cohort, patient_level_split
-    from vitals_train import (
-        alarm_burden,
-        compute_news_scores,
-        lead_time_summary,
-        threshold_at_specificity,
-        train_xgboost,
-    )
+    from vitals_train import alarm_burden, compute_news_scores, lead_time_summary, threshold_at_specificity
 
-    project_root = Path(__file__).resolve().parent.parent
-    out = project_root / output_dir if not Path(output_dir).is_absolute() else Path(output_dir)
-
-    cohort = generate_synthetic_cohort(n_patients=n_patients, seed=seed)
-    windowed = add_personalized_features(build_windows(cohort), cohort)
-    split = patient_level_split(windowed, seed=seed)
-    model, _metrics = train_xgboost(split)
-
+    out = Path(out_dir)
     xgb_score = model.predict_proba(split.X_test)[:, 1]
     news_score = compute_news_scores(split.X_test)
     threshold = threshold_at_specificity(split.y_test, xgb_score)
-
     scores = {"XGBoost": xgb_score, "NEWS": news_score}
+
     pr_path = plot_pr_curves(split.y_test, scores, out / "vitals_pr_curve.png")
     burden_path = plot_alarm_burden_curve(split.y_test, scores, out / "vitals_alarm_burden.png")
 
@@ -183,12 +169,10 @@ def generate_report(output_dir: str | Path = "models", n_patients: int = 500, se
         pv = cohort.vitals[cohort.vitals["patient_id"] == pid].sort_values("hour")
         traj_path = plot_deterioration_trajectory(pv, arrest_hour, out / "vitals_trajectory.png")
 
-    summary = lead_time_summary(split, xgb_score, threshold)
     print(f"PR curve:      {pr_path}")
     print(f"Alarm burden:  {burden_path}")
     print(f"Lead-time:     {lead_path}")
     print(f"Trajectory:    {traj_path}")
-
     print("\n=== Alarm burden at matched 90% sensitivity ===")
     for name, score in scores.items():
         b = alarm_burden(split.y_test, score, target_sensitivity=0.90)
@@ -196,6 +180,7 @@ def generate_report(output_dir: str | Path = "models", n_patients: int = 500, se
             f"  {name:8s} specificity={b['specificity']:.3f} "
             f"false-alarm={b['false_alarm_rate']:.3f} alarms/100={b['alarms_per_100_windows']:.1f}"
         )
+    summary = lead_time_summary(split, xgb_score, threshold)
     if summary:
         print(
             f"\nDetected {int(summary['detected'])}/{int(summary['arrest_patients'])} arrests, "
@@ -207,6 +192,20 @@ def generate_report(output_dir: str | Path = "models", n_patients: int = 500, se
         "lead_time": str(lead_path),
         "trajectory": str(traj_path),
     }
+
+
+def generate_report(output_dir: str | Path = "models", n_patients: int = 500, seed: int = 42) -> dict[str, Any]:
+    """Train on a synthetic cohort and render the full figure set (no external data)."""
+    from vitals_data import add_personalized_features, build_windows, generate_synthetic_cohort, patient_level_split
+    from vitals_train import train_xgboost
+
+    project_root = Path(__file__).resolve().parent.parent
+    out = project_root / output_dir if not Path(output_dir).is_absolute() else Path(output_dir)
+
+    cohort = generate_synthetic_cohort(n_patients=n_patients, seed=seed)
+    split = patient_level_split(add_personalized_features(build_windows(cohort), cohort), seed=seed)
+    model, _metrics = train_xgboost(split)
+    return render_report(split, model, cohort, out)
 
 
 def main() -> None:

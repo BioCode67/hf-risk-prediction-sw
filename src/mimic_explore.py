@@ -199,6 +199,18 @@ def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS
             f"median {lead['median_lead_time_h']:.1f}h before arrest (@95% specificity)"
         )
 
+    # Render the full 본선 figure set from the real data, in one command.
+    from vitals_phenotype import discover_phenotypes
+    from vitals_report import render_report
+
+    models_dir = Path(__file__).resolve().parent.parent / "models"
+    print()
+    render_report(split, model, cohort, models_dir)
+    try:
+        discover_phenotypes(cohort, output_dir=models_dir)
+    except Exception as exc:  # clustering needs a few arrest patients
+        print(f"(phenotype step skipped: {exc})")
+
 
 def main(root: str | None = None) -> None:
     """Summarize the MIMIC-IV Demo and run it through the early-warning loader."""
