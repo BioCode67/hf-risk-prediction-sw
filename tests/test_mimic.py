@@ -26,6 +26,10 @@ def _write_demo(root):
             {"stay_id": 30001, "charttime": stamp, "itemid": 999999, "valuenum": 140},  # non-vital, filtered out
         ]
     pd.DataFrame(rows).to_csv(icu / "chartevents.csv", index=False)
+    # procedureevents: stay 30001 has a documented Cardiac Arrest (two rows).
+    pd.DataFrame(
+        {"stay_id": [30001, 30001], "starttime": ["2150-01-01 05:00:00", "2150-01-01 03:00:00"], "itemid": [225466, 225466]}
+    ).to_csv(icu / "procedureevents.csv", index=False)
     return root
 
 
@@ -70,6 +74,23 @@ def test_mimic_arrest_events_takes_earliest_per_stay(tmp_path):
     arrests = mimic_arrest_events(events, [225466])
     assert dict(zip(arrests["stay_id"], arrests["arrest_time"].astype(str)))[30001] == "2150-01-01 03:00:00"
     assert len(arrests) == 2
+
+
+def test_load_arrest_events_from_procedureevents(tmp_path):
+    from mimic_explore import load_arrest_events
+
+    arrests = load_arrest_events(_write_demo(tmp_path))
+    assert list(arrests["stay_id"]) == [30001]
+    assert str(arrests["arrest_time"].iloc[0]) == "2150-01-01 03:00:00"  # earliest event
+
+
+def test_arrest_event_summary_counts(tmp_path):
+    from mimic_explore import arrest_event_summary
+
+    summary = arrest_event_summary(_write_demo(tmp_path)).set_index("itemid")
+    assert summary.loc[225466, "events"] == 2
+    assert summary.loc[225466, "stays"] == 1
+    assert summary.loc[225475, "stays"] == 0  # Respiratory Arrest absent here
 
 
 def test_mimic_vitals_flow_into_cohort(tmp_path):

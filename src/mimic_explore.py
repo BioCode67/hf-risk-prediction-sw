@@ -38,15 +38,19 @@ def _read_table(icu_dir: Path, name: str, **kwargs) -> pd.DataFrame:
     raise FileNotFoundError(f"MIMIC ICU table '{name}' not found under {icu_dir}")
 
 
+def _icu_dir(root: str | Path) -> Path:
+    """Resolve the ICU-module folder (accept either the demo root or icu/ itself)."""
+    icu = Path(root) / "icu"
+    return icu if icu.exists() else Path(root)
+
+
 def load_mimic_demo(root: str | Path) -> dict[str, pd.DataFrame]:
     """Load the ICU module tables needed for vital-sign early warning.
 
     Returns a dict with ``icustays``, ``d_items`` and the vital-sign subset of
     ``chartevents`` (only the itemids in :data:`MIMIC_ITEMID_MAP`).
     """
-    icu_dir = Path(root) / "icu"
-    if not icu_dir.exists():
-        icu_dir = Path(root)  # allow pointing directly at the icu folder
+    icu_dir = _icu_dir(root)
     d_items = _read_table(icu_dir, "d_items")
     icustays = _read_table(icu_dir, "icustays")
 
@@ -90,10 +94,7 @@ def scan_arrest_items(root: str | Path) -> pd.DataFrame:
     matches an arrest/CPR keyword (with its ``linksto`` table) and let a human
     pick the definition. Run this on your real demo and share the result.
     """
-    icu_dir = Path(root) / "icu"
-    if not icu_dir.exists():
-        icu_dir = Path(root)
-    d_items = _read_table(icu_dir, "d_items")
+    d_items = _read_table(_icu_dir(root), "d_items")
     label = d_items["label"].fillna("").str.lower()
     mask = pd.Series(False, index=d_items.index)
     for keyword in ARREST_KEYWORDS:
@@ -121,6 +122,71 @@ def mimic_arrest_events(
     return arrest
 
 
+# Default IHCA definition: documented arrest markers in procedureevents.
+# 225466 ("Cardiac Arrest") alone is the cleanest primary definition; the other
+# two broaden sensitivity. (Norepinephrine 221906 is deliberately excluded — it
+# only matched the keyword scan via "nor-EPINEPHrine" and is a routine pressor.)
+ARREST_ITEMIDS: tuple[int, ...] = (225466, 225475, 225464)
+
+
+def load_arrest_events(root: str | Path, itemids: tuple[int, ...] = ARREST_ITEMIDS) -> pd.DataFrame:
+    """Build ``[stay_id, arrest_time]`` from procedureevents arrest markers.
+
+    Returns an empty frame (all stays become controls) when procedureevents is
+    absent, so the modelling path degrades gracefully instead of crashing.
+    """
+    try:
+        proc = _read_table(_icu_dir(root), "procedureevents", usecols=["stay_id", "starttime", "itemid"])
+    except (FileNotFoundError, ValueError):
+        return pd.DataFrame(columns=["stay_id", "arrest_time"])
+    return mimic_arrest_events(proc, list(itemids), time_col="starttime")
+
+
+def arrest_event_summary(root: str | Path, itemids: tuple[int, ...] = ARREST_ITEMIDS) -> pd.DataFrame:
+    """Per-itemid event and distinct-stay counts for the arrest markers."""
+    icu_dir = _icu_dir(root)
+    proc = _read_table(icu_dir, "procedureevents", usecols=["stay_id", "starttime", "itemid"])
+    d_items = _read_table(icu_dir, "d_items")
+    labels = dict(zip(d_items["itemid"], d_items["label"]))
+    rows = []
+    for itemid in itemids:
+        sub = proc[proc["itemid"] == itemid]
+        rows.append(
+            {"itemid": itemid, "label": labels.get(itemid, "<absent>"), "events": len(sub), "stays": sub["stay_id"].nunique()}
+        )
+    return pd.DataFrame(rows)
+
+
+def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS) -> None:
+    """Full early-warning modelling on MIMIC-IV: XGBoost vs NEWS + personalized features."""
+    from vitals_data import add_personalized_features, build_windows, cohort_from_mimic, patient_level_split
+    from vitals_train import evaluate_news_baseline, train_xgboost
+
+    tables = load_mimic_demo(root)
+    arrests = load_arrest_events(root, arrest_itemids)
+    cohort = cohort_from_mimic(tables["chartevents_vitals"], arrest_events=arrests)
+    windowed = add_personalized_features(build_windows(cohort), cohort)
+
+    positives = int(windowed.labels.sum())
+    print(f"Arrest stays: {arrests['stay_id'].nunique()} | positive (pre-arrest) windows: {positives} / {len(windowed.labels)}")
+    if positives < 10:
+        print(
+            "\nToo few arrest windows to train here — the 100-patient demo has almost no\n"
+            "documented arrests. The pipeline is ready; the full MIMIC-IV (free CITI\n"
+            "credentialing) is the only gate. Same command will model it end-to-end."
+        )
+        return
+
+    split = patient_level_split(windowed)
+    _model, xgb = train_xgboost(split)
+    news = evaluate_news_baseline(split)
+    for m in (xgb, news):
+        print(
+            f"{m.model_name:8s} AUPRC={m.auprc:.3f} ROC={m.roc_auc:.3f} "
+            f"sens@95spec={m.sensitivity_at_95_specificity:.3f} falseAlarm={m.false_alarm_rate:.3f}"
+        )
+
+
 def main(root: str | None = None) -> None:
     """Summarize the MIMIC-IV Demo and run it through the early-warning loader."""
     import sys
@@ -136,6 +202,15 @@ def main(root: str | None = None) -> None:
         print("=== Candidate cardiac-arrest / resuscitation items (from d_items) ===")
         found = scan_arrest_items(root)
         print(found.to_string(index=False) if len(found) else "(no keyword matches — full MIMIC-IV likely needed)")
+        return
+
+    if "--arrest-counts" in sys.argv:
+        print("=== Arrest-marker event counts (procedureevents) ===")
+        print(arrest_event_summary(root).to_string(index=False))
+        return
+
+    if "--model" in sys.argv:
+        run_model(root)
         return
 
     tables = load_mimic_demo(root)
