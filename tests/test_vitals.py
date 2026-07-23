@@ -255,6 +255,31 @@ def test_xgboost_learns_signal(trained):
     assert metrics.auprc > metrics.prevalence  # better than the base rate
 
 
+def test_time_to_arrest_is_recorded():
+    """Positive windows carry a small positive time-to-arrest; controls are NaN."""
+    import numpy as np
+
+    from vitals_data import build_windows, generate_synthetic_cohort
+
+    windowed = build_windows(generate_synthetic_cohort(n_patients=150, seed=9))
+    assert windowed.time_to_arrest is not None
+    tta = windowed.time_to_arrest.to_numpy()
+    positives = tta[windowed.labels.to_numpy() == 1]
+    assert np.all(positives > 0) and np.all(positives <= 1)  # arrest within the 1h horizon
+
+
+def test_lead_time_summary(trained):
+    """Lead-time reports a plausible detection rate and non-negative lead time."""
+    from vitals_train import lead_time_summary, threshold_at_specificity
+
+    model, _metrics, split = trained
+    score = model.predict_proba(split.X_test)[:, 1]
+    summary = lead_time_summary(split, score, threshold_at_specificity(split.y_test, score))
+    assert summary["arrest_patients"] > 0
+    assert 0.0 <= summary["detection_rate"] <= 1.0
+    assert summary["median_lead_time_h"] >= 0.0
+
+
 def test_shap_window_factors(trained):
     """Per-window SHAP returns the requested number of drivers with expected keys."""
     from vitals_explain import window_risk_factors

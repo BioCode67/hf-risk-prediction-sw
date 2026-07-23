@@ -160,7 +160,12 @@ def arrest_event_summary(root: str | Path, itemids: tuple[int, ...] = ARREST_ITE
 def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS) -> None:
     """Full early-warning modelling on MIMIC-IV: XGBoost vs NEWS + personalized features."""
     from vitals_data import add_personalized_features, build_windows, cohort_from_mimic, patient_level_split
-    from vitals_train import evaluate_news_baseline, train_xgboost
+    from vitals_train import (
+        evaluate_news_baseline,
+        lead_time_summary,
+        threshold_at_specificity,
+        train_xgboost,
+    )
 
     tables = load_mimic_demo(root)
     arrests = load_arrest_events(root, arrest_itemids)
@@ -178,12 +183,20 @@ def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS
         return
 
     split = patient_level_split(windowed)
-    _model, xgb = train_xgboost(split)
+    model, xgb = train_xgboost(split)
     news = evaluate_news_baseline(split)
     for m in (xgb, news):
         print(
             f"{m.model_name:8s} AUPRC={m.auprc:.3f} ROC={m.roc_auc:.3f} "
             f"sens@95spec={m.sensitivity_at_95_specificity:.3f} falseAlarm={m.false_alarm_rate:.3f}"
+        )
+
+    score = model.predict_proba(split.X_test)[:, 1]
+    lead = lead_time_summary(split, score, threshold_at_specificity(split.y_test, score))
+    if lead:
+        print(
+            f"Lead-time: detected {int(lead['detected'])}/{int(lead['arrest_patients'])} arrests, "
+            f"median {lead['median_lead_time_h']:.1f}h before arrest (@95% specificity)"
         )
 
 

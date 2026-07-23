@@ -126,6 +126,9 @@ class WindowedDataset:
     labels: pd.Series
     groups: pd.Series
     feature_names: list[str]
+    # Hours from each window's end to the arrest (NaN for control windows);
+    # used for lead-time analysis. Optional for backward compatibility.
+    time_to_arrest: pd.Series | None = None
 
 
 @dataclass
@@ -140,6 +143,8 @@ class PatientSplit:
     groups_test: np.ndarray
     feature_names: list[str]
     imputation_medians: pd.Series
+    # Test-set hours-to-arrest per window (aligned with X_test); for lead-time.
+    time_to_arrest_test: np.ndarray | None = None
 
 
 # --- Synthetic cohort -----------------------------------------------------
@@ -510,6 +515,7 @@ def build_windows(
     rows: list[dict[str, float]] = []
     labels: list[int] = []
     groups: list[int] = []
+    times_to_arrest: list[float] = []
 
     for patient_id, group in cohort.vitals.groupby("patient_id"):
         group = group.sort_values("hour")
@@ -533,6 +539,7 @@ def build_windows(
             rows.append(_window_features(observation))
             labels.append(label)
             groups.append(patient_id)
+            times_to_arrest.append(float(arrest_hour - end) if has_arrest else float("nan"))
 
     features = pd.DataFrame(rows, columns=names)
     return WindowedDataset(
@@ -540,6 +547,7 @@ def build_windows(
         labels=pd.Series(labels, name="label"),
         groups=pd.Series(groups, name="patient_id"),
         feature_names=names,
+        time_to_arrest=pd.Series(times_to_arrest, name="time_to_arrest"),
     )
 
 
@@ -578,6 +586,7 @@ def add_personalized_features(
         labels=windowed.labels,
         groups=windowed.groups,
         feature_names=windowed.feature_names + new_names,
+        time_to_arrest=windowed.time_to_arrest,
     )
 
 
@@ -616,6 +625,10 @@ def patient_level_split(
     X_train = X_train.fillna(medians).fillna(0.0)
     X_test = X_test.fillna(medians).fillna(0.0)
 
+    time_to_arrest_test = (
+        windowed.time_to_arrest[test_mask].to_numpy() if windowed.time_to_arrest is not None else None
+    )
+
     return PatientSplit(
         X_train=X_train,
         X_test=X_test,
@@ -625,6 +638,7 @@ def patient_level_split(
         groups_test=groups[test_mask].to_numpy(),
         feature_names=windowed.feature_names,
         imputation_medians=medians,
+        time_to_arrest_test=time_to_arrest_test,
     )
 
 

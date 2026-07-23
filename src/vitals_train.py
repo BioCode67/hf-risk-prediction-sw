@@ -203,6 +203,42 @@ def evaluate_news_baseline(split: PatientSplit) -> EarlyWarningMetrics:
     return evaluate("NEWS", split.y_test, scores)
 
 
+def lead_time_summary(
+    split: PatientSplit,
+    y_score: np.ndarray,
+    threshold: float,
+    max_lookback_hours: float = 48.0,
+) -> dict[str, float]:
+    """How early the model alarms before arrest, among test arrest patients.
+
+    For each arrest patient, the lead time is the largest time-to-arrest among
+    their windows that cross ``threshold`` within ``max_lookback_hours`` (i.e. the
+    earliest alarm). Reports detection rate and median/mean lead time — the metric
+    that captures the whole point of *early* warning, and which (unlike raw
+    specificity) does not depend on control patients.
+    """
+    if split.time_to_arrest_test is None:
+        return {}
+    frame = pd.DataFrame(
+        {"patient": split.groups_test, "tta": split.time_to_arrest_test, "score": y_score}
+    )
+    arrest = frame[frame["tta"].notna() & (frame["tta"] >= 0)]
+    n_patients = int(arrest["patient"].nunique())
+    lead_times: list[float] = []
+    for _, group in arrest.groupby("patient"):
+        alarms = group[(group["score"] >= threshold) & (group["tta"] <= max_lookback_hours)]
+        if len(alarms):
+            lead_times.append(float(alarms["tta"].max()))
+    detected = len(lead_times)
+    return {
+        "arrest_patients": float(n_patients),
+        "detected": float(detected),
+        "detection_rate": float(detected / n_patients) if n_patients else 0.0,
+        "median_lead_time_h": float(np.median(lead_times)) if lead_times else 0.0,
+        "mean_lead_time_h": float(np.mean(lead_times)) if lead_times else 0.0,
+    }
+
+
 def save_artifact(
     model: XGBClassifier,
     split: PatientSplit,
