@@ -92,8 +92,14 @@ def main(root: str | None = None) -> None:
     # labels in the demo -> all treated as controls; full MIMIC-IV adds events).
     cohort = cohort_from_mimic(vitals)
     print(f"\nCohort: {cohort.vitals['patient_id'].nunique():,} ICU stays, {len(cohort.vitals):,} hourly rows")
+
+    print("\n=== Vital value distribution (hourly, after bucketing) ===")
+    stats = cohort.vitals[list(VITALS)].describe(percentiles=[0.5]).T[["count", "mean", "std", "min", "50%", "max"]]
+    stats["missing_%"] = (1 - cohort.vitals[list(VITALS)].notna().mean()) * 100
+    print(stats.round(2).to_string())
+
     windowed = build_windows(cohort)
-    print(f"Windows: {len(windowed.features):,} x {len(windowed.feature_names)} features")
+    print(f"\nWindows: {len(windowed.features):,} x {len(windowed.feature_names)} features")
 
     sample = cohort.vitals["patient_id"].iloc[0]
     print(f"\n=== Sample stay {sample} (first hours) ===")
