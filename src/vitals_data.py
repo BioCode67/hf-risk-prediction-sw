@@ -86,6 +86,14 @@ _NOISE_SD: Final[dict[str, float]] = {
     "spo2": 0.6,
     "resp_rate": 1.2,
 }
+# Per-patient deterioration *profiles* (signs unchanged; only magnitudes reweighted)
+# so synthetic arrests split into distinct phenotypes — respiratory-dominant vs
+# circulatory-dominant vs mixed — mirroring real physiological subtypes.
+_DETERIORATION_PROFILES: Final[dict[str, dict[str, float]]] = {
+    "respiratory": {"pulse": 0.6, "sbp": 0.6, "dbp": 0.6, "temperature": 1.0, "spo2": 1.6, "resp_rate": 1.6},
+    "circulatory": {"pulse": 1.4, "sbp": 1.5, "dbp": 1.5, "temperature": 1.0, "spo2": 0.6, "resp_rate": 0.6},
+    "mixed": {vital: 1.0 for vital in VITALS},
+}
 _CLIP_RANGE: Final[dict[str, tuple[float, float]]] = {
     "pulse": (30.0, 200.0),
     "sbp": (50.0, 240.0),
@@ -202,6 +210,8 @@ def generate_synthetic_cohort(
         # Per-patient deterioration severity: some patients crash hard, others
         # decompensate subtly — this is what makes early warning genuinely hard.
         severity = float(rng.uniform(0.45, 1.1))
+        profile_names = list(_DETERIORATION_PROFILES)
+        profile = _DETERIORATION_PROFILES[profile_names[int(rng.integers(0, len(profile_names)))]]
 
         if is_arrest:
             if stay <= earliest_arrest:
@@ -226,7 +236,11 @@ def generate_synthetic_cohort(
 
             row: dict[str, float] = {"patient_id": patient_id, "hour": hour}
             for vital in VITALS:
-                value = baseline[vital] + _DETERIORATION[vital] * frac * severity + rng.normal(0, _NOISE_SD[vital])
+                value = (
+                    baseline[vital]
+                    + _DETERIORATION[vital] * frac * severity * profile[vital]
+                    + rng.normal(0, _NOISE_SD[vital])
+                )
                 low, high = _CLIP_RANGE[vital]
                 value = float(np.clip(value, low, high))
                 if rng.random() < missing_rate:

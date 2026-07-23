@@ -41,6 +41,7 @@ heart-failure-risk-prediction/
 │   ├── vitals_train.py     # [time-series] XGBoost vs NEWS early-warning + false-alarm metrics
 │   ├── vitals_explain.py   # [time-series] SHAP drivers for early-warning windows
 │   ├── vitals_report.py    # [time-series] PR-curve / trajectory / lead-time figures
+│   ├── vitals_phenotype.py # [time-series] cardiac-arrest phenotype clustering + heatmap
 │   ├── mimic_explore.py    # [time-series] explore/model real MIMIC-IV (--scan-arrest/--model)
 │   └── omop_explore.py     # [OMOP] explore any OMOP CDM CSV folder (Eunomia/competition)
 ├── tests/
@@ -190,6 +191,7 @@ python src/vitals_data.py     # build synthetic cohort → windows → patient-l
 python src/vitals_train.py    # train XGBoost, compare against the NEWS baseline
 python src/vitals_explain.py  # SHAP drivers + models/vitals_shap_summary.png
 python src/vitals_report.py   # PR-curve, deterioration trajectory, lead-time figures
+python src/vitals_phenotype.py # discover cardiac-arrest phenotypes + heatmap
 ```
 
 **Method.** Hourly vitals (pulse, systolic/diastolic BP, temperature, SpO₂,
