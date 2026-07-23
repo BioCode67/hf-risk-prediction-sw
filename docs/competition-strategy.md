@@ -190,8 +190,10 @@ XGBoost (cost-sensitive, scale_pos_weight)   ── 비교군: NEWS(임상표준
 
 - [x] **데이터 설명서(KHTH 스키마) 확보 → `cohort_from_khth` 실스키마 정렬 완료**
 - [x] **개인화 기저선 편차 피처 + MIMIC 어댑터 구현** (`add_personalized_features`, `cohort_from_mimic`)
-- [ ] **MIMIC-IV 확보** — PhysioNet CITI 인증 후 다운로드(무료). 우선 **MIMIC-IV Demo(100명, 인증 불필요)**
-      로 `cohort_from_mimic` 실데이터 검증부터. 심정지 라벨(`arrest_events`) 정의 확정.
+- [x] **MIMIC-IV Demo 실데이터 검증 완료** — 로딩·정제·윈도우·모델 end-to-end 동작 확인
+- [x] **심정지 라벨 정의 확정** — `procedureevents` 225466 "Cardiac Arrest"(+225475/225464). `--model` 원커맨드
+- [x] **예선 제안서 30장 골격 초안** (`docs/proposal-draft.md`)
+- [ ] **전체 MIMIC-IV 확보** — PhysioNet CITI 인증(무료, 2~7일) 후 `--model`로 실학습 결과 산출
 - [ ] **안심존 1회 방문 예약** (예선 +5 가점 + 샘플 5명분 확인, 실제 값 범위·결측 확인)
 - [ ] 제안서 골격 문서화(본 문서의 §2를 30장으로 전개)
 - [ ] 안심존 **사전신고 패키지 목록** 확정본 작성

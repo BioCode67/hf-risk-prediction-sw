@@ -37,14 +37,19 @@ heart-failure-risk-prediction/
 │   ├── train.py            # [static] LightGBM/XGBoost + Optuna (AUPRC) training
 │   ├── explainability.py   # [static] SHAP TreeExplainer (global + per-patient)
 │   ├── main.py             # [static] FastAPI server (/predict, /convert-omop)
-│   ├── vitals_data.py      # [time-series] synthetic cohort, sliding windows, patient split
+│   ├── vitals_data.py      # [time-series] synthetic + KHTH + MIMIC adapters, windows, split
 │   ├── vitals_train.py     # [time-series] XGBoost vs NEWS early-warning + false-alarm metrics
-│   └── vitals_explain.py   # [time-series] SHAP drivers for early-warning windows
+│   ├── vitals_explain.py   # [time-series] SHAP drivers for early-warning windows
+│   ├── mimic_explore.py    # [time-series] explore/model real MIMIC-IV (--scan-arrest/--model)
+│   └── omop_explore.py     # [OMOP] explore any OMOP CDM CSV folder (Eunomia/competition)
 ├── tests/
 │   ├── test_pipeline.py    # static heart-failure pipeline tests
-│   └── test_vitals.py      # vital-sign early-warning tests (synthetic, always run)
+│   ├── test_vitals.py      # vital-sign early-warning tests (synthetic, always run)
+│   ├── test_mimic.py       # MIMIC-IV explorer/adapter tests (network-free)
+│   └── test_omop.py        # OMOP CDM explorer tests (network-free)
 ├── docs/
-│   └── competition-strategy.md  # K-Health 공모전 전략 & 제안서 설계
+│   ├── competition-strategy.md  # K-Health 공모전 전략 & 제안서 설계
+│   └── proposal-draft.md        # 예선 제안서 30장 골격 초안
 ├── data/                   # Datasets (git-ignored)
 ├── models/                 # Trained artifacts (git-ignored)
 ├── requirements.txt
@@ -203,6 +208,22 @@ sources via thin adapters: `generate_synthetic_cohort` (CI/demo, no data needed)
 competition cohort lacks, for honest false-alarm measurement), and
 `cohort_from_khth` (the 안심존 competition tables, labelled by the exact `CARDT`
 arrest time).
+
+**Develop on real MIMIC-IV.** The MIMIC-IV **Demo** (100 patients) is downloadable
+without credentialing; `mimic_explore.py` drives the whole loop:
+
+```bash
+python src/mimic_explore.py <mimic-demo-dir>                 # structure, vital coverage, value distribution
+python src/mimic_explore.py <mimic-demo-dir> --scan-arrest   # candidate cardiac-arrest itemids (d_items)
+python src/mimic_explore.py <mimic-demo-dir> --arrest-counts # how many stays actually arrested
+python src/mimic_explore.py <mimic-demo-dir> --model         # XGBoost vs NEWS + personalized features
+```
+
+The demo has almost no documented arrests (it is for structure/quality checks);
+the full MIMIC-IV (free CITI credentialing) runs the same `--model` command with
+real positives. In-hospital cardiac arrest is defined from `procedureevents`
+(`ARREST_ITEMIDS` — 225466 "Cardiac Arrest" primary, + respiratory-arrest /
+defibrillation for sensitivity).
 
 **Why it matters.** On the synthetic demo, XGBoost and NEWS look near-identical
 on ROC-AUC (~0.99) yet diverge sharply on **AUPRC** (≈0.78 vs ≈0.61) — exactly
