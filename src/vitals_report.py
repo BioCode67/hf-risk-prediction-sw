@@ -81,6 +81,39 @@ def plot_deterioration_trajectory(
     return output
 
 
+def plot_alarm_burden_curve(
+    y_true: np.ndarray,
+    scores: dict[str, np.ndarray],
+    output_path: str | Path,
+    sensitivities: np.ndarray | None = None,
+) -> Path:
+    """Alarms per 100 windows vs matched sensitivity — the false-alarm trade-off.
+
+    Holding detection (sensitivity) fixed, a lower curve means fewer alarms for the
+    same catch rate. This is the clearest picture of the false-alarm-reduction thesis.
+    """
+    from vitals_train import threshold_at_sensitivity
+
+    grid = np.linspace(0.70, 0.99, 12) if sensitivities is None else sensitivities
+    plt, fig, ax = _new_axes((7, 5))
+    for name, score in scores.items():
+        alarms = []
+        for target in grid:
+            threshold = threshold_at_sensitivity(y_true, score, float(target))
+            alarms.append(100.0 * float((score >= threshold).mean()))
+        ax.plot(grid, alarms, marker="o", lw=2, label=name)
+    ax.set_xlabel("Matched sensitivity (detection rate)")
+    ax.set_ylabel("Alarms per 100 windows")
+    ax.set_title("Alarm burden at matched sensitivity (lower is better)")
+    ax.legend()
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
 def plot_lead_time_distribution(lead_times: list[float], output_path: str | Path) -> Path:
     """Histogram of per-patient lead time (hours before arrest of first alarm)."""
     plt, fig, ax = _new_axes((7, 5))
@@ -107,7 +140,13 @@ def generate_report(output_dir: str | Path = "models", n_patients: int = 500, se
     split into the individual ``plot_*`` functions instead.
     """
     from vitals_data import add_personalized_features, build_windows, generate_synthetic_cohort, patient_level_split
-    from vitals_train import compute_news_scores, lead_time_summary, threshold_at_specificity, train_xgboost
+    from vitals_train import (
+        alarm_burden,
+        compute_news_scores,
+        lead_time_summary,
+        threshold_at_specificity,
+        train_xgboost,
+    )
 
     project_root = Path(__file__).resolve().parent.parent
     out = project_root / output_dir if not Path(output_dir).is_absolute() else Path(output_dir)
@@ -121,7 +160,9 @@ def generate_report(output_dir: str | Path = "models", n_patients: int = 500, se
     news_score = compute_news_scores(split.X_test)
     threshold = threshold_at_specificity(split.y_test, xgb_score)
 
-    pr_path = plot_pr_curves(split.y_test, {"XGBoost": xgb_score, "NEWS": news_score}, out / "vitals_pr_curve.png")
+    scores = {"XGBoost": xgb_score, "NEWS": news_score}
+    pr_path = plot_pr_curves(split.y_test, scores, out / "vitals_pr_curve.png")
+    burden_path = plot_alarm_burden_curve(split.y_test, scores, out / "vitals_alarm_burden.png")
 
     # Lead-time distribution from per-patient earliest alarms.
     frame = pd.DataFrame({"patient": split.groups_test, "tta": split.time_to_arrest_test, "score": xgb_score})
@@ -144,14 +185,28 @@ def generate_report(output_dir: str | Path = "models", n_patients: int = 500, se
 
     summary = lead_time_summary(split, xgb_score, threshold)
     print(f"PR curve:      {pr_path}")
+    print(f"Alarm burden:  {burden_path}")
     print(f"Lead-time:     {lead_path}")
     print(f"Trajectory:    {traj_path}")
+
+    print("\n=== Alarm burden at matched 90% sensitivity ===")
+    for name, score in scores.items():
+        b = alarm_burden(split.y_test, score, target_sensitivity=0.90)
+        print(
+            f"  {name:8s} specificity={b['specificity']:.3f} "
+            f"false-alarm={b['false_alarm_rate']:.3f} alarms/100={b['alarms_per_100_windows']:.1f}"
+        )
     if summary:
         print(
-            f"Detected {int(summary['detected'])}/{int(summary['arrest_patients'])} arrests, "
+            f"\nDetected {int(summary['detected'])}/{int(summary['arrest_patients'])} arrests, "
             f"median lead-time {summary['median_lead_time_h']:.1f}h"
         )
-    return {"pr_curve": str(pr_path), "lead_time": str(lead_path), "trajectory": str(traj_path)}
+    return {
+        "pr_curve": str(pr_path),
+        "alarm_burden": str(burden_path),
+        "lead_time": str(lead_path),
+        "trajectory": str(traj_path),
+    }
 
 
 def main() -> None:

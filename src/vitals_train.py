@@ -25,6 +25,7 @@ from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,
     roc_auc_score,
+    roc_curve,
 )
 from xgboost import XGBClassifier
 
@@ -68,16 +69,14 @@ def sensitivity_at_specificity(
     y_score: np.ndarray,
     target_specificity: float = 0.95,
 ) -> float:
-    """Best achievable sensitivity while specificity >= the target."""
-    best = 0.0
-    for threshold in np.unique(y_score):
-        pred = (y_score >= threshold).astype(int)
-        tn, fp, fn, tp = confusion_matrix(y_true, pred, labels=[0, 1]).ravel()
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-        sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        if specificity >= target_specificity:
-            best = max(best, sensitivity)
-    return float(best)
+    """Best achievable sensitivity while specificity >= the target (vectorized)."""
+    y_true = np.asarray(y_true)
+    if np.unique(y_true).size < 2:
+        return 0.0
+    fpr, tpr, _ = roc_curve(y_true, y_score)
+    specificity = 1.0 - fpr
+    mask = specificity >= target_specificity
+    return float(tpr[mask].max()) if mask.any() else 0.0
 
 
 def threshold_at_specificity(
@@ -85,19 +84,63 @@ def threshold_at_specificity(
     y_score: np.ndarray,
     target_specificity: float = 0.95,
 ) -> float:
-    """Lowest threshold whose specificity meets the target (max sensitivity)."""
-    thresholds = np.unique(y_score)
-    chosen = float(thresholds.max()) + 1e-9  # default: flag nothing (specificity 1)
-    best_sensitivity = -1.0
-    for threshold in thresholds:
-        pred = (y_score >= threshold).astype(int)
-        tn, fp, fn, tp = confusion_matrix(y_true, pred, labels=[0, 1]).ravel()
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-        sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        if specificity >= target_specificity and sensitivity > best_sensitivity:
-            best_sensitivity = sensitivity
-            chosen = float(threshold)
-    return chosen
+    """Threshold meeting the target specificity while maximizing sensitivity."""
+    scores = np.asarray(y_score)
+    flag_nothing = float(scores.max()) + 1e-9
+    if np.unique(np.asarray(y_true)).size < 2:
+        return flag_nothing
+    fpr, tpr, thresholds = roc_curve(y_true, scores)
+    mask = (1.0 - fpr) >= target_specificity
+    if not mask.any():
+        return flag_nothing
+    threshold = thresholds[int(np.argmax(np.where(mask, tpr, -1.0)))]
+    return float(threshold) if np.isfinite(threshold) else flag_nothing
+
+
+def threshold_at_sensitivity(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    target_sensitivity: float = 0.90,
+) -> float:
+    """Threshold meeting the target sensitivity while maximizing specificity (fewest alarms)."""
+    scores = np.asarray(y_score)
+    flag_everything = float(scores.min())
+    if np.unique(np.asarray(y_true)).size < 2:
+        return flag_everything
+    fpr, tpr, thresholds = roc_curve(y_true, scores)
+    mask = tpr >= target_sensitivity
+    if not mask.any():
+        return flag_everything
+    threshold = thresholds[int(np.argmax(np.where(mask, 1.0 - fpr, -1.0)))]
+    return float(threshold) if np.isfinite(threshold) else flag_everything
+
+
+def alarm_burden(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    target_sensitivity: float = 0.90,
+) -> dict[str, float]:
+    """Operating point at a *matched sensitivity*: the alarm burden it costs.
+
+    This is the clinical framing of the thesis — hold detection fixed and compare
+    how many (false) alarms each model raises. Reports specificity, false-alarm
+    rate and alarms per 100 windows at the threshold that just achieves the target
+    sensitivity.
+    """
+    threshold = threshold_at_sensitivity(y_true, y_score, target_sensitivity)
+    pred = (y_score >= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, pred, labels=[0, 1]).ravel()
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    return {
+        "target_sensitivity": float(target_sensitivity),
+        "threshold": float(threshold),
+        "sensitivity": float(sensitivity),
+        "specificity": float(specificity),
+        "false_alarm_rate": float(1.0 - precision) if (tp + fp) > 0 else 0.0,
+        "alarms_per_100_windows": float(100.0 * pred.mean()),
+    }
 
 
 def evaluate(

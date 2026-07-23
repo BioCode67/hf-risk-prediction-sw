@@ -18,6 +18,15 @@ def test_plot_pr_curves_creates_file(tmp_path):
     assert out.exists() and out.stat().st_size > 0
 
 
+def test_plot_alarm_burden_curve_creates_file(tmp_path):
+    from vitals_report import plot_alarm_burden_curve
+
+    y = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+    scores = {"XGBoost": np.array([0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9]), "NEWS": np.array([1.0, 1, 2, 3, 2, 3, 4, 5])}
+    out = plot_alarm_burden_curve(y, scores, tmp_path / "burden.png")
+    assert out.exists() and out.stat().st_size > 0
+
+
 def test_plot_lead_time_distribution_creates_file(tmp_path):
     from vitals_report import plot_lead_time_distribution
 

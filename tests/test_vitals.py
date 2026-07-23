@@ -246,6 +246,20 @@ def test_sensitivity_at_specificity_perfect():
     assert sensitivity_at_specificity(y_true, y_score, 0.95) == pytest.approx(1.0)
 
 
+def test_threshold_and_alarm_burden_at_sensitivity():
+    """At a matched sensitivity, alarm burden is reported at the right operating point."""
+    from vitals_train import alarm_burden, threshold_at_sensitivity
+
+    y_true = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+    y_score = np.array([0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9])
+    assert threshold_at_sensitivity(y_true, y_score, 1.0) <= 0.6  # must catch all positives
+
+    burden = alarm_burden(y_true, y_score, target_sensitivity=1.0)
+    assert burden["sensitivity"] == pytest.approx(1.0)
+    assert burden["specificity"] == pytest.approx(1.0)  # perfectly separable
+    assert burden["alarms_per_100_windows"] == pytest.approx(50.0)  # only the 4 positives
+
+
 def test_news_scores_increase_with_deterioration():
     """NEWS assigns a higher score to a deteriorating window than a stable one."""
     import pandas as pd
