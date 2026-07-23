@@ -40,13 +40,15 @@ heart-failure-risk-prediction/
 │   ├── vitals_data.py      # [time-series] synthetic + KHTH + MIMIC adapters, windows, split
 │   ├── vitals_train.py     # [time-series] XGBoost vs NEWS early-warning + false-alarm metrics
 │   ├── vitals_explain.py   # [time-series] SHAP drivers for early-warning windows
+│   ├── vitals_report.py    # [time-series] PR-curve / trajectory / lead-time figures
 │   ├── mimic_explore.py    # [time-series] explore/model real MIMIC-IV (--scan-arrest/--model)
 │   └── omop_explore.py     # [OMOP] explore any OMOP CDM CSV folder (Eunomia/competition)
 ├── tests/
 │   ├── test_pipeline.py    # static heart-failure pipeline tests
 │   ├── test_vitals.py      # vital-sign early-warning tests (synthetic, always run)
 │   ├── test_mimic.py       # MIMIC-IV explorer/adapter tests (network-free)
-│   └── test_omop.py        # OMOP CDM explorer tests (network-free)
+│   ├── test_omop.py        # OMOP CDM explorer tests (network-free)
+│   └── test_report.py      # visual-report rendering tests
 ├── docs/
 │   ├── competition-strategy.md  # K-Health 공모전 전략 & 제안서 설계
 │   └── proposal-draft.md        # 예선 제안서 30장 골격 초안
@@ -187,6 +189,7 @@ restricted data required); real `KHTH_PINFO`/`KHTH_VITAL` tables plug in through
 python src/vitals_data.py     # build synthetic cohort → windows → patient-level split
 python src/vitals_train.py    # train XGBoost, compare against the NEWS baseline
 python src/vitals_explain.py  # SHAP drivers + models/vitals_shap_summary.png
+python src/vitals_report.py   # PR-curve, deterioration trajectory, lead-time figures
 ```
 
 **Method.** Hourly vitals (pulse, systolic/diastolic BP, temperature, SpO₂,
