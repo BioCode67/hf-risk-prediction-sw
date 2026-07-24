@@ -2,8 +2,12 @@
 data/*
 *.zip
 *.csv
+*.csv.gz
 models/*.pkl
 !data/.gitkeep
+
+# MIMIC-IV demo dataset (downloaded locally, not part of the repo)
+mimic-demo/
 
 # Model side-artifacts
 models/*.png
