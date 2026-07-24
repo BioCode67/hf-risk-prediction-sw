@@ -215,6 +215,23 @@ this personalizes the alarm and, on the synthetic demo, lifts AUPRC from ≈0.76
 ≈0.84. It also turns the case-only cohort's within-patient structure into the
 method itself.
 
+**Sequence-model prototype (GPU track).** `src/vitals_seq.py` is an alternative
+that keeps the *raw temporal shape*: each window is the `(8h × 6 vitals)` sequence
+itself, fed to a small **GRU** (cost-sensitive loss, train-only standardization)
+that learns the deterioration dynamics directly, instead of hand-crafted
+statistics. It reuses the exact windows/labels of `build_windows`, so it is an
+apples-to-apples comparison with the XGBoost baseline — and it is the natural way
+to exploit the NVIDIA A6000 dev server and a 본선 differentiator beyond the tabular
+model. `torch` is an **optional** dependency (`requirements-seq.txt`), deliberately
+kept out of the offline 안심존 lightweight package set; the module imports and the
+suite runs without it (the training test skips when torch is absent).
+
+```bash
+pip install -r requirements-seq.txt          # optional, GPU-track only
+python src/vitals_seq.py --epochs 20          # GRU vs XGBoost on the same synthetic cohort
+python src/vitals_seq.py --gpu                # train the GRU on CUDA (A6000); CPU fallback
+```
+
 **Data sources (one pipeline).** The same windowing/labelling runs on three
 sources via thin adapters: `generate_synthetic_cohort` (CI/demo, no data needed),
 `cohort_from_mimic` (real MIMIC-IV ICU data — supplies the *control* patients the
