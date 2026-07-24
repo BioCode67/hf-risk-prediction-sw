@@ -157,7 +157,7 @@ def arrest_event_summary(root: str | Path, itemids: tuple[int, ...] = ARREST_ITE
     return pd.DataFrame(rows)
 
 
-def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS) -> None:
+def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS, use_gpu: bool = False) -> None:
     """Full early-warning modelling on MIMIC-IV: XGBoost vs NEWS + personalized features."""
     from vitals_data import add_personalized_features, build_windows, cohort_from_mimic, patient_level_split
     from vitals_train import (
@@ -183,7 +183,7 @@ def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS
         return
 
     split = patient_level_split(windowed)
-    model, xgb = train_xgboost(split)
+    model, xgb = train_xgboost(split, use_gpu=use_gpu)
     news = evaluate_news_baseline(split)
     for m in (xgb, news):
         print(
@@ -216,11 +216,19 @@ def main(root: str | None = None) -> None:
     """Summarize the MIMIC-IV Demo and run it through the early-warning loader."""
     import sys
 
+    # Messages/labels include Unicode (em-dashes, Korean). Default Windows
+    # consoles use a legacy codepage (e.g. cp949) that raises UnicodeEncodeError
+    # on those characters; force UTF-8 so the CLI never dies on a status line.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):  # non-reconfigurable stream
+        pass
+
     positional = [a for a in sys.argv[1:] if not a.startswith("--")]
     root = root or (positional[0] if positional else None)
     if root is None:
         print(__doc__)
-        print("Usage: python src/mimic_explore.py /path/to/mimic-iv-clinical-database-demo-2.2 [--scan-arrest]")
+        print("Usage: python src/mimic_explore.py /path/to/mimic-iv-clinical-database-demo-2.2 [--scan-arrest] [--model [--gpu]]")
         return
 
     if "--scan-arrest" in sys.argv:
@@ -235,7 +243,7 @@ def main(root: str | None = None) -> None:
         return
 
     if "--model" in sys.argv:
-        run_model(root)
+        run_model(root, use_gpu="--gpu" in sys.argv)
         return
 
     tables = load_mimic_demo(root)

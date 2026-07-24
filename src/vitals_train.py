@@ -28,6 +28,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 from xgboost import XGBClassifier
+from xgboost.core import XGBoostError
 
 from vitals_data import (
     build_windows,
@@ -217,8 +218,17 @@ def compute_news_scores(X: pd.DataFrame) -> np.ndarray:
 # --- Models ---------------------------------------------------------------
 
 
-def train_xgboost(split: PatientSplit, **overrides: Any) -> tuple[XGBClassifier, EarlyWarningMetrics]:
-    """Train a cost-sensitive XGBoost early-warning classifier."""
+def train_xgboost(
+    split: PatientSplit, use_gpu: bool = False, **overrides: Any
+) -> tuple[XGBClassifier, EarlyWarningMetrics]:
+    """Train a cost-sensitive XGBoost early-warning classifier.
+
+    ``use_gpu=True`` runs training on an NVIDIA GPU (CUDA) — worth it at the full
+    MIMIC-IV / KHTH scale and for many-trial Optuna search, not for the tiny
+    synthetic dev cohort. It falls back to CPU automatically when no GPU is
+    visible, so the same call works on a laptop and on the A6000 server alike.
+    Explicit ``device=``/``tree_method=`` overrides win over ``use_gpu``.
+    """
     params: dict[str, Any] = {
         "objective": "binary:logistic",
         "eval_metric": "aucpr",
@@ -232,10 +242,20 @@ def train_xgboost(split: PatientSplit, **overrides: Any) -> tuple[XGBClassifier,
         "colsample_bytree": 0.8,
         "verbosity": 0,
     }
+    if use_gpu:
+        params.update({"device": "cuda", "tree_method": "hist"})
     params.update(overrides)
 
-    model = XGBClassifier(**params)
-    model.fit(split.X_train, split.y_train)
+    try:
+        model = XGBClassifier(**params)
+        model.fit(split.X_train, split.y_train)
+    except XGBoostError as exc:
+        if params.get("device") != "cuda":
+            raise  # a real failure, not a missing GPU
+        print(f"[gpu] CUDA unavailable ({exc}); falling back to CPU.")
+        params.update({"device": "cpu", "tree_method": "hist"})
+        model = XGBClassifier(**params)
+        model.fit(split.X_train, split.y_train)
     y_score = model.predict_proba(split.X_test)[:, 1]
     return model, evaluate("XGBoost", split.y_test, y_score)
 
@@ -316,6 +336,7 @@ def train(
     seed: int = 42,
     model_dir: str | Path = "models",
     n_estimators: int = 300,
+    use_gpu: bool = False,
 ) -> dict[str, Any]:
     """Run the full synthetic early-warning pipeline and save the model.
 
@@ -328,7 +349,7 @@ def train(
     windowed = build_windows(cohort)
     split = patient_level_split(windowed, test_size=0.2, seed=seed)
 
-    model, xgb_metrics = train_xgboost(split, n_estimators=n_estimators)
+    model, xgb_metrics = train_xgboost(split, n_estimators=n_estimators, use_gpu=use_gpu)
     news_metrics = evaluate_news_baseline(split)
 
     output_file = model_path / "vitals_ews_model.pkl"
@@ -350,8 +371,10 @@ def train(
 
 
 def main() -> None:
-    """CLI entry point for early-warning training."""
-    train()
+    """CLI entry point for early-warning training. Pass ``--gpu`` to use CUDA."""
+    import sys
+
+    train(use_gpu="--gpu" in sys.argv)
 
 
 if __name__ == "__main__":
