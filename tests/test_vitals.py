@@ -305,6 +305,19 @@ def test_xgboost_learns_signal(trained):
     assert metrics.auprc > metrics.prevalence  # better than the base rate
 
 
+def test_tune_xgboost_returns_usable_params(trained):
+    """Optuna search returns hyperparameters that train_xgboost accepts directly."""
+    from vitals_train import train_xgboost, tune_xgboost
+
+    _model, _metrics, split = trained
+    best = tune_xgboost(split, n_trials=2, n_splits=2, use_gpu=False, seed=0)
+    assert isinstance(best, dict)
+    assert {"n_estimators", "learning_rate", "max_depth"} <= best.keys()
+    # The returned params must be consumable as overrides without collisions.
+    _model2, metrics = train_xgboost(split, **best)
+    assert 0.0 <= metrics.auprc <= 1.0
+
+
 def test_time_to_arrest_is_recorded():
     """Positive windows carry a small positive time-to-arrest; controls are NaN."""
     import numpy as np

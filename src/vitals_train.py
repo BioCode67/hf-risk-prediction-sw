@@ -260,6 +260,70 @@ def train_xgboost(
     return model, evaluate("XGBoost", split.y_test, y_score)
 
 
+def tune_xgboost(
+    split: PatientSplit,
+    n_trials: int = 30,
+    n_splits: int = 4,
+    use_gpu: bool = False,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Optuna search for XGBoost hyperparameters, maximizing patient-level CV AUPRC.
+
+    Folds are grouped by patient (``GroupKFold`` over ``groups_train``) so no
+    patient's windows leak between train and validation — the same leakage guard
+    as the outer split. The objective is **AUPRC** (not AUROC), keeping the search
+    aligned with the rare-event / false-alarm focus of the project. Returns the
+    best hyperparameters as a plain dict, ready to splat into ``train_xgboost`` or
+    ``train`` as overrides. ``use_gpu=True`` runs each trial on CUDA (A6000) and
+    falls back to a CPU search when no GPU is visible.
+    """
+    import optuna
+    from sklearn.model_selection import GroupKFold
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    X, y, groups = split.X_train, split.y_train, split.groups_train
+    spw = scale_pos_weight(y)
+    device_params = {"device": "cuda", "tree_method": "hist"} if use_gpu else {}
+    n_splits = max(2, min(n_splits, int(np.unique(groups).size)))
+
+    def objective(trial: optuna.Trial) -> float:
+        params: dict[str, Any] = {
+            "objective": "binary:logistic",
+            "eval_metric": "aucpr",
+            "random_state": seed,
+            "scale_pos_weight": spw,
+            "verbosity": 0,
+            "n_estimators": trial.suggest_int("n_estimators", 100, 500),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "max_depth": trial.suggest_int("max_depth", 3, 8),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
+            **device_params,
+        }
+        fold_scores: list[float] = []
+        for train_idx, val_idx in GroupKFold(n_splits=n_splits).split(X, y, groups):
+            model = XGBClassifier(**params)
+            model.fit(X.iloc[train_idx], y[train_idx])
+            proba = model.predict_proba(X.iloc[val_idx])[:, 1]
+            fold_scores.append(float(average_precision_score(y[val_idx], proba)))
+        return float(np.mean(fold_scores))
+
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
+    try:
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    except XGBoostError as exc:
+        if not use_gpu:
+            raise
+        print(f"[gpu] CUDA unavailable ({exc}); re-running the search on CPU.")
+        return tune_xgboost(split, n_trials=n_trials, n_splits=n_splits, use_gpu=False, seed=seed)
+    print(f"Optuna: best CV AUPRC={study.best_value:.4f} over {len(study.trials)} trials")
+    return dict(study.best_params)
+
+
 def evaluate_news_baseline(split: PatientSplit) -> EarlyWarningMetrics:
     """Score the test windows with NEWS as the clinical baseline."""
     scores = compute_news_scores(split.X_test)
@@ -337,10 +401,14 @@ def train(
     model_dir: str | Path = "models",
     n_estimators: int = 300,
     use_gpu: bool = False,
+    tune: bool = False,
+    n_trials: int = 30,
 ) -> dict[str, Any]:
     """Run the full synthetic early-warning pipeline and save the model.
 
-    Returns a results dict comparing XGBoost against the NEWS baseline.
+    Returns a results dict comparing XGBoost against the NEWS baseline. With
+    ``tune=True`` an Optuna search (patient-grouped CV, AUPRC objective) picks the
+    hyperparameters before the final fit; otherwise the fixed defaults are used.
     """
     project_root = Path(__file__).resolve().parent.parent
     model_path = project_root / model_dir if not Path(model_dir).is_absolute() else Path(model_dir)
@@ -349,7 +417,12 @@ def train(
     windowed = build_windows(cohort)
     split = patient_level_split(windowed, test_size=0.2, seed=seed)
 
-    model, xgb_metrics = train_xgboost(split, n_estimators=n_estimators, use_gpu=use_gpu)
+    overrides = (
+        tune_xgboost(split, n_trials=n_trials, use_gpu=use_gpu, seed=seed)
+        if tune
+        else {"n_estimators": n_estimators}
+    )
+    model, xgb_metrics = train_xgboost(split, use_gpu=use_gpu, **overrides)
     news_metrics = evaluate_news_baseline(split)
 
     output_file = model_path / "vitals_ews_model.pkl"
@@ -359,6 +432,8 @@ def train(
         "xgboost": asdict(xgb_metrics),
         "news_baseline": asdict(news_metrics),
         "model_path": str(output_file),
+        "tuned": tune,
+        "best_params": overrides if tune else None,
         "note": "Synthetic development data. Real training runs in the 안심존 on KHTH data.",
     }
     (model_path / "vitals_ews_metrics.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
@@ -371,10 +446,14 @@ def train(
 
 
 def main() -> None:
-    """CLI entry point for early-warning training. Pass ``--gpu`` to use CUDA."""
+    """CLI entry point. Flags: ``--gpu`` (CUDA), ``--tune`` (Optuna), ``--trials N``."""
     import sys
 
-    train(use_gpu="--gpu" in sys.argv)
+    argv = sys.argv
+    n_trials = 30
+    if "--trials" in argv and argv.index("--trials") + 1 < len(argv):
+        n_trials = int(argv[argv.index("--trials") + 1])
+    train(use_gpu="--gpu" in argv, tune="--tune" in argv, n_trials=n_trials)
 
 
 if __name__ == "__main__":
