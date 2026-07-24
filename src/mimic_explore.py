@@ -157,14 +157,25 @@ def arrest_event_summary(root: str | Path, itemids: tuple[int, ...] = ARREST_ITE
     return pd.DataFrame(rows)
 
 
-def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS, use_gpu: bool = False) -> None:
-    """Full early-warning modelling on MIMIC-IV: XGBoost vs NEWS + personalized features."""
+def run_model(
+    root: str | Path,
+    arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS,
+    use_gpu: bool = False,
+    tune: bool = False,
+    n_trials: int = 30,
+) -> None:
+    """Full early-warning modelling on MIMIC-IV: XGBoost vs NEWS + personalized features.
+
+    ``use_gpu`` trains on CUDA; ``tune`` runs a patient-grouped Optuna AUPRC search
+    (``n_trials``) and trains the final model on the best hyperparameters.
+    """
     from vitals_data import add_personalized_features, build_windows, cohort_from_mimic, patient_level_split
     from vitals_train import (
         evaluate_news_baseline,
         lead_time_summary,
         threshold_at_specificity,
         train_xgboost,
+        tune_xgboost,
     )
 
     tables = load_mimic_demo(root)
@@ -183,7 +194,8 @@ def run_model(root: str | Path, arrest_itemids: tuple[int, ...] = ARREST_ITEMIDS
         return
 
     split = patient_level_split(windowed)
-    model, xgb = train_xgboost(split, use_gpu=use_gpu)
+    best_params = tune_xgboost(split, n_trials=n_trials, use_gpu=use_gpu) if tune else {}
+    model, xgb = train_xgboost(split, use_gpu=use_gpu, **best_params)
     news = evaluate_news_baseline(split)
     for m in (xgb, news):
         print(
@@ -228,7 +240,7 @@ def main(root: str | None = None) -> None:
     root = root or (positional[0] if positional else None)
     if root is None:
         print(__doc__)
-        print("Usage: python src/mimic_explore.py /path/to/mimic-iv-clinical-database-demo-2.2 [--scan-arrest] [--model [--gpu]]")
+        print("Usage: python src/mimic_explore.py /path/to/mimic-iv-clinical-database-demo-2.2 [--scan-arrest] [--model [--gpu] [--tune] [--trials=N]]")
         return
 
     if "--scan-arrest" in sys.argv:
@@ -243,7 +255,8 @@ def main(root: str | None = None) -> None:
         return
 
     if "--model" in sys.argv:
-        run_model(root, use_gpu="--gpu" in sys.argv)
+        trials = next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--trials=")), 30)
+        run_model(root, use_gpu="--gpu" in sys.argv, tune="--tune" in sys.argv, n_trials=trials)
         return
 
     tables = load_mimic_demo(root)
