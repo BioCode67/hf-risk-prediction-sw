@@ -189,10 +189,18 @@ restricted data required); real `KHTH_PINFO`/`KHTH_VITAL` tables plug in through
 ```bash
 python src/vitals_data.py     # build synthetic cohort → windows → patient-level split
 python src/vitals_train.py    # train XGBoost, compare against the NEWS baseline
+python src/vitals_train.py --tune --trials 40  # Optuna search (patient-grouped CV, AUPRC) before the final fit
+python src/vitals_train.py --gpu               # train on an NVIDIA GPU (CUDA); auto-falls back to CPU
 python src/vitals_explain.py  # SHAP drivers + models/vitals_shap_summary.png
 python src/vitals_report.py   # PR-curve, deterioration trajectory, lead-time figures
 python src/vitals_phenotype.py # discover cardiac-arrest phenotypes + heatmap
 ```
+
+`--gpu` and `--tune` compose (each Optuna trial runs on CUDA). They are optional
+add-ons for the GPU dev server / larger data — the default path stays fixed-
+hyperparameter CPU, keeping tests and the offline 안심존 (pre-declared packages)
+unaffected. `--gpu` uses only `xgboost`'s CUDA backend and `--tune` only the
+already-declared `optuna`; no new dependencies.
 
 **Method.** Hourly vitals (pulse, systolic/diastolic BP, temperature, SpO₂,
 respiratory rate) → sliding-window features (mean/std/min/max/last/**slope**/delta
@@ -222,6 +230,7 @@ python src/mimic_explore.py <mimic-demo-dir>                 # structure, vital 
 python src/mimic_explore.py <mimic-demo-dir> --scan-arrest   # candidate cardiac-arrest itemids (d_items)
 python src/mimic_explore.py <mimic-demo-dir> --arrest-counts # how many stays actually arrested
 python src/mimic_explore.py <mimic-demo-dir> --model         # XGBoost vs NEWS + personalized features
+python src/mimic_explore.py <mimic-demo-dir> --model --gpu   # ...the same, training on the GPU (A6000)
 ```
 
 The demo has almost no documented arrests (it is for structure/quality checks);
