@@ -55,8 +55,45 @@ def test_sequence_model_learns_signal():
 
     data = build_sequences(generate_synthetic_cohort(n_patients=200, seed=7))
     split = patient_level_sequence_split(data, seed=7)
-    _model, metrics = train_sequence_model(split, epochs=8, use_gpu=False, seed=7)
+    _predictor, metrics = train_sequence_model(split, epochs=8, use_gpu=False, seed=7)
 
     assert 0.0 <= metrics.auprc <= 1.0
     assert metrics.roc_auc > 0.7
     assert metrics.auprc > metrics.prevalence  # better than predicting the base rate
+
+
+def test_sequence_interpretability_and_lead_time(tmp_path):
+    """Lead-time, permutation importance and occlusion saliency return sane shapes."""
+    pytest.importorskip("torch")
+    from vitals_data import OBSERVATION_WINDOW_HOURS, VITALS, generate_synthetic_cohort
+    from vitals_seq import (
+        build_sequences,
+        channel_importance,
+        occlusion_saliency,
+        patient_level_sequence_split,
+        plot_sequence_saliency,
+        sequence_lead_time,
+        train_sequence_model,
+    )
+
+    data = build_sequences(generate_synthetic_cohort(n_patients=200, seed=11))
+    split = patient_level_sequence_split(data, seed=11)
+    predictor, _metrics = train_sequence_model(split, epochs=8, use_gpu=False, seed=11)
+    scores = predictor.proba(split["X_test"])
+
+    lead = sequence_lead_time(split, scores)
+    assert lead["arrest_patients"] > 0
+    assert 0.0 <= lead["detection_rate"] <= 1.0
+
+    importance = channel_importance(predictor, split)
+    assert {item["channel"] for item in importance} == set(VITALS)
+    # Sorted by AUPRC drop descending, and the model relies on at least one vital.
+    drops = [item["auprc_drop"] for item in importance]
+    assert drops == sorted(drops, reverse=True)
+    assert max(drops) > 0
+
+    saliency = occlusion_saliency(predictor, split)
+    assert saliency.shape == (OBSERVATION_WINDOW_HOURS, len(VITALS))
+
+    out = plot_sequence_saliency(saliency, split["channels"], tmp_path / "saliency.png")
+    assert out.exists() and out.stat().st_size > 0

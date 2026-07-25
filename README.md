@@ -226,9 +226,16 @@ model. `torch` is an **optional** dependency (`requirements-seq.txt`), deliberat
 kept out of the offline 안심존 lightweight package set; the module imports and the
 suite runs without it (the training test skips when torch is absent).
 
+The prototype carries the same clinical framing as the tabular track: **lead-time**
+(how early the GRU alarms before arrest, at 95% specificity), **permutation channel
+importance** (which vital the model relies on — the SHAP-drivers analogue), and an
+**occlusion saliency heatmap** (`models/vitals_seq_saliency.png`) showing *when* and
+*which* vital drives each positive prediction. On the synthetic demo the top driver
+is SpO₂, matching the tabular SHAP result.
+
 ```bash
 pip install -r requirements-seq.txt          # optional, GPU-track only
-python src/vitals_seq.py --epochs 20          # GRU vs XGBoost on the same synthetic cohort
+python src/vitals_seq.py --epochs 20          # GRU vs XGBoost + lead-time, drivers, saliency figure
 python src/vitals_seq.py --gpu                # train the GRU on CUDA (A6000); CPU fallback
 ```
 

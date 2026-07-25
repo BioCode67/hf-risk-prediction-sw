@@ -21,6 +21,7 @@ it, and the test skips when it is absent.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -210,6 +211,30 @@ class SequenceMetrics:
     n_test: int
 
 
+@dataclass
+class SeqPredictor:
+    """A trained GRU plus its train-only standardization, for leakage-safe scoring.
+
+    Post-hoc analysis (channel importance, occlusion saliency) must feed the model
+    inputs standardized with the *same* train statistics as training; bundling them
+    here means callers pass raw ``(N, T, C)`` sequences and never re-derive stats.
+    """
+
+    model: Any
+    mean: np.ndarray
+    std: np.ndarray
+    device: str
+
+    def proba(self, X_raw: np.ndarray) -> np.ndarray:
+        """Arrest probability for raw ``(N, T, C)`` sequences."""
+        _require_torch()
+        Xs = (X_raw.astype(np.float32) - self.mean) / self.std
+        self.model.eval()
+        with torch.no_grad():
+            logits = self.model(torch.from_numpy(Xs).to(self.device)).cpu().numpy()
+        return 1.0 / (1.0 + np.exp(-logits))  # sigmoid → probability
+
+
 def train_sequence_model(
     split: dict[str, Any],
     hidden_size: int = 48,
@@ -219,28 +244,26 @@ def train_sequence_model(
     lr: float = 1e-3,
     use_gpu: bool = False,
     seed: int = 42,
-) -> tuple[Any, SequenceMetrics]:
+) -> tuple[SeqPredictor, SequenceMetrics]:
     """Train the GRU with a cost-sensitive loss; evaluate AUPRC/ROC on the test set.
 
     The positive class is up-weighted by ``negatives/positives`` (the same
     cost-sensitive framing as the XGBoost ``scale_pos_weight``), because arrests
     are rare. Standardization uses **train-only** channel statistics to avoid
-    leakage. Returns the trained model and its metrics.
+    leakage. Returns a :class:`SeqPredictor` (model + standardization) and metrics.
     """
     _require_torch()
     torch.manual_seed(seed)
     device = _resolve_device(use_gpu)
 
     X_train = split["X_train"].astype(np.float32)
-    X_test = split["X_test"].astype(np.float32)
     y_train, y_test = split["y_train"], split["y_test"]
 
     # Standardize per channel with train-only stats (broadcast over time).
     mean = X_train.reshape(-1, X_train.shape[-1]).mean(axis=0)
     std = X_train.reshape(-1, X_train.shape[-1]).std(axis=0)
     std[std == 0] = 1.0
-    X_train = (X_train - mean) / std
-    X_test = (X_test - mean) / std
+    X_train_std = (X_train - mean) / std
 
     positives = int((y_train == 1).sum())
     negatives = int((y_train == 0).sum())
@@ -251,7 +274,7 @@ def train_sequence_model(
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     loader = DataLoader(
-        TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train.astype(np.float32))),
+        TensorDataset(torch.from_numpy(X_train_std), torch.from_numpy(y_train.astype(np.float32))),
         batch_size=batch_size,
         shuffle=True,
     )
@@ -265,10 +288,8 @@ def train_sequence_model(
             loss.backward()
             optimizer.step()
 
-    model.eval()
-    with torch.no_grad():
-        logits = model(torch.from_numpy(X_test).to(device)).cpu().numpy()
-    scores = 1.0 / (1.0 + np.exp(-logits))  # sigmoid → probability
+    predictor = SeqPredictor(model=model, mean=mean, std=std, device=device)
+    scores = predictor.proba(split["X_test"])
 
     metrics = SequenceMetrics(
         model_name="GRU",
@@ -277,7 +298,117 @@ def train_sequence_model(
         prevalence=float(np.mean(y_test)),
         n_test=int(len(y_test)),
     )
-    return model, metrics
+    return predictor, metrics
+
+
+# --- Interpretability & lead-time -----------------------------------------
+
+
+def channel_importance(
+    predictor: SeqPredictor, split: dict[str, Any], seed: int = 42
+) -> list[dict[str, float]]:
+    """Permutation importance per vital channel: AUPRC drop when it is shuffled.
+
+    Each channel's values are permuted across windows (time order preserved) and
+    the resulting fall in test AUPRC measures how much the model relies on that
+    vital — the sequence-model analogue of the tabular SHAP global drivers.
+    """
+    X, y, channels = split["X_test"], split["y_test"], split["channels"]
+    if np.unique(y).size < 2:
+        return []
+    rng = np.random.default_rng(seed)
+    base = float(average_precision_score(y, predictor.proba(X)))
+    out: list[dict[str, float]] = []
+    for idx, name in enumerate(channels):
+        perturbed = X.copy()
+        perturbed[:, :, idx] = perturbed[rng.permutation(len(perturbed)), :, idx]
+        drop = base - float(average_precision_score(y, predictor.proba(perturbed)))
+        out.append({"channel": name, "auprc_drop": drop})
+    return sorted(out, key=lambda d: d["auprc_drop"], reverse=True)
+
+
+def occlusion_saliency(predictor: SeqPredictor, split: dict[str, Any]) -> np.ndarray:
+    """Per ``(timestep, channel)`` contribution to the positive-window predictions.
+
+    For arrest (positive) windows, each cell is set to its channel's baseline
+    (train mean) and the mean drop in predicted probability is recorded — a
+    ``(T, C)`` saliency map of *when* and *which* vital the model attends to.
+    """
+    X, y = split["X_test"], split["y_test"]
+    positives = X[y == 1]
+    if len(positives) == 0:
+        return np.zeros((X.shape[1], X.shape[2]), dtype=np.float64)
+    base = float(predictor.proba(positives).mean())
+    saliency = np.zeros((X.shape[1], X.shape[2]), dtype=np.float64)
+    for t in range(X.shape[1]):
+        for c in range(X.shape[2]):
+            occluded = positives.copy()
+            occluded[:, t, c] = predictor.mean[c]
+            saliency[t, c] = base - float(predictor.proba(occluded).mean())
+    return saliency
+
+
+def sequence_lead_time(
+    split: dict[str, Any],
+    scores: np.ndarray,
+    target_specificity: float = 0.95,
+    max_lookback_hours: float = 48.0,
+) -> dict[str, float]:
+    """Detection rate and median lead-time for the GRU (test arrest patients).
+
+    Mirrors :func:`vitals_train.lead_time_summary`: per arrest patient, the lead
+    time is the largest time-to-arrest among their windows that cross the
+    at-specificity threshold within ``max_lookback_hours`` (the earliest alarm).
+    """
+    from vitals_train import threshold_at_specificity
+
+    y, groups, tta = split["y_test"], split["groups_test"], split["tta_test"]
+    threshold = threshold_at_specificity(y, scores, target_specificity)
+    frame = pd.DataFrame({"patient": groups, "tta": tta, "score": scores})
+    arrest = frame[frame["tta"].notna() & (frame["tta"] >= 0)]
+    n_patients = int(arrest["patient"].nunique())
+    lead_times: list[float] = []
+    for _patient, group in arrest.groupby("patient"):
+        alarms = group[(group["score"] >= threshold) & (group["tta"] <= max_lookback_hours)]
+        if len(alarms):
+            lead_times.append(float(alarms["tta"].max()))
+    detected = len(lead_times)
+    return {
+        "arrest_patients": float(n_patients),
+        "detected": float(detected),
+        "detection_rate": float(detected / n_patients) if n_patients else 0.0,
+        "median_lead_time_h": float(np.median(lead_times)) if lead_times else float("nan"),
+        "mean_lead_time_h": float(np.mean(lead_times)) if lead_times else float("nan"),
+    }
+
+
+def plot_sequence_saliency(saliency: np.ndarray, channels: list[str], output_path: str | Path) -> Path:
+    """Heatmap of the ``(timestep, channel)`` occlusion saliency (channels as rows)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    data = saliency.T  # (C, T): channels as rows, hour offset as columns
+    limit = float(np.max(np.abs(data))) or 1.0
+    n_hours = data.shape[1]
+    fig, ax = plt.subplots(figsize=(1.2 + 0.7 * n_hours, 1.2 + 0.5 * len(channels)))
+    im = ax.imshow(data, cmap="Reds", vmin=0.0, vmax=limit, aspect="auto")
+    ax.set_xticks(range(n_hours))
+    ax.set_xticklabels([f"t-{n_hours - 1 - h}h" for h in range(n_hours)])
+    ax.set_yticks(range(len(channels)))
+    ax.set_yticklabels(channels)
+    for i in range(data.shape[0]):
+        for j in range(data.shape[1]):
+            ax.text(j, i, f"{data[i, j]:.02f}", ha="center", va="center", fontsize=7)
+    ax.set_title("GRU occlusion saliency: drop in arrest prob when (hour, vital) is masked")
+    fig.colorbar(im, ax=ax, label="mean probability drop")
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output
 
 
 def run_demo(n_patients: int = 600, epochs: int = 15, use_gpu: bool = False, seed: int = 42) -> SequenceMetrics:
@@ -295,7 +426,7 @@ def run_demo(n_patients: int = 600, epochs: int = 15, use_gpu: bool = False, see
         f"| train {len(split['y_train']):,} / test {len(split['y_test']):,} "
         f"| test prevalence {np.mean(split['y_test']):.3f}"
     )
-    _model, seq_metrics = train_sequence_model(split, epochs=epochs, use_gpu=use_gpu, seed=seed)
+    predictor, seq_metrics = train_sequence_model(split, epochs=epochs, use_gpu=use_gpu, seed=seed)
 
     # Tabular (XGBoost) baseline on the same cohort, for a like-for-like number.
     tab_split = patient_level_split(build_windows(cohort), seed=seed)
@@ -304,6 +435,22 @@ def run_demo(n_patients: int = 600, epochs: int = 15, use_gpu: bool = False, see
     print("\n=== Sequence model vs tabular baseline (same synthetic cohort) ===")
     print(f"  GRU      AUPRC={seq_metrics.auprc:.3f}  ROC={seq_metrics.roc_auc:.3f}")
     print(f"  XGBoost  AUPRC={xgb_metrics.auprc:.3f}  ROC={xgb_metrics.roc_auc:.3f}")
+
+    scores = predictor.proba(split["X_test"])
+    lead = sequence_lead_time(split, scores)
+    print(
+        f"\nLead-time (GRU @95% spec): detected {int(lead['detected'])}/{int(lead['arrest_patients'])} arrests, "
+        f"median {lead['median_lead_time_h']:.1f}h before arrest"
+    )
+
+    print("\n=== Top vital drivers (permutation AUPRC drop) ===")
+    for rank, item in enumerate(channel_importance(predictor, split)[:5], start=1):
+        print(f"  {rank}. {item['channel']}: {item['auprc_drop']:+.4f}")
+
+    out_dir = Path(__file__).resolve().parent.parent / "models"
+    saliency = occlusion_saliency(predictor, split)
+    fig_path = plot_sequence_saliency(saliency, split["channels"], out_dir / "vitals_seq_saliency.png")
+    print(f"\nSaliency heatmap: {fig_path}")
     return seq_metrics
 
 
