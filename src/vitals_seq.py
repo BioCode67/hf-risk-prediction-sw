@@ -416,6 +416,11 @@ def run_demo(n_patients: int = 600, epochs: int = 15, use_gpu: bool = False, see
     from vitals_data import build_windows, generate_synthetic_cohort, patient_level_split
     from vitals_train import train_xgboost
 
+    if _HAS_TORCH:
+        dev = _resolve_device(use_gpu)
+        gpu_name = torch.cuda.get_device_name(0) if dev == "cuda" else "CPU"
+        print(f"Device: {dev} ({gpu_name}) | patients={n_patients} epochs={epochs}")
+
     cohort = generate_synthetic_cohort(n_patients=n_patients, seed=seed)
 
     # Sequence (GRU) track.
@@ -455,14 +460,19 @@ def run_demo(n_patients: int = 600, epochs: int = 15, use_gpu: bool = False, see
 
 
 def main() -> None:
-    """CLI entry point. Flags: ``--gpu`` (CUDA), ``--epochs N``."""
+    """CLI entry point. Flags: ``--gpu`` (CUDA), ``--epochs N``, ``--patients N``."""
     import sys
 
     argv = sys.argv
-    epochs = 15
-    if "--epochs" in argv and argv.index("--epochs") + 1 < len(argv):
-        epochs = int(argv[argv.index("--epochs") + 1])
-    run_demo(epochs=epochs, use_gpu="--gpu" in argv)
+
+    def _arg(flag: str, default: int) -> int:
+        return int(argv[argv.index(flag) + 1]) if flag in argv and argv.index(flag) + 1 < len(argv) else default
+
+    run_demo(
+        n_patients=_arg("--patients", 600),
+        epochs=_arg("--epochs", 15),
+        use_gpu="--gpu" in argv,
+    )
 
 
 if __name__ == "__main__":

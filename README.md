@@ -236,7 +236,8 @@ is SpO₂, matching the tabular SHAP result.
 ```bash
 pip install -r requirements-seq.txt          # optional, GPU-track only
 python src/vitals_seq.py --epochs 20          # GRU vs XGBoost + lead-time, drivers, saliency figure
-python src/vitals_seq.py --gpu                # train the GRU on CUDA (A6000); CPU fallback
+python src/vitals_seq.py --gpu --patients 3000 --epochs 60   # train the GRU on CUDA (A6000); CPU fallback
+bash scripts/run_a6000.sh                     # one-command A6000 run: GPU GRU + tuned XGBoost, logged
 ```
 
 **Data sources (one pipeline).** The same windowing/labelling runs on three
