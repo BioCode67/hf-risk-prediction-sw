@@ -1,0 +1,4 @@
+# Shell scripts must use LF so they run on the Linux GPU/안심존 servers even when
+# checked out on Windows (where autocrlf would otherwise introduce CRLF and break
+# the shebang). Keep this regardless of any local core.autocrlf setting.
+*.sh text eol=lf
