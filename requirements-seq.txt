@@ -1,0 +1,10 @@
+# Optional dependencies for the neural sequence-model prototype (src/vitals_seq.py).
+#
+# GPU **dev-server** track only (e.g. NVIDIA A6000). These are deliberately NOT in
+# the core requirements.txt: the offline 안심존 runs a pre-declared, lightweight
+# package set (numpy/pandas/sklearn/xgboost/shap) and must stay torch-free. The
+# rest of the pipeline and the whole test suite run without anything here.
+#
+# CPU wheel:   pip install -r requirements-seq.txt
+# CUDA build:  see https://pytorch.org/get-started/locally/ for the matching wheel.
+torch>=2.2
