@@ -10,7 +10,14 @@ Download (no login):
     # training_setA/ and training_setB/ contain p*.psv (one patient per file)
 
 Run:
-    python src/sepsis_explore.py /path/to/training_setA [--gpu] [--tune] [--trials=N] [--max-files=N]
+    python src/sepsis_explore.py /path/to/training_setA [--gpu] [--tune] [--trials=N]
+        [--max-files=N] [--horizon=H] [--window=W] [--gap=G]
+
+The prediction horizon defaults to 1 hour, which is deliberately strict: with one
+event per patient and a 1-hour horizon only ~one window per patient is positive, so
+the positive rate is ~0.2% and precision-based metrics (AUPRC) collapse to the base
+rate even though ROC shows weak signal. A clinically standard early-warning horizon
+(``--horizon=6``) yields several positive windows per patient and a learnable task.
 """
 
 from __future__ import annotations
@@ -18,10 +25,27 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from vitals_data import add_personalized_features, build_windows, cohort_from_challenge2019, patient_level_split
+from vitals_data import (
+    OBSERVATION_WINDOW_HOURS,
+    PREDICTION_HORIZON_HOURS,
+    GAP_HOURS,
+    add_personalized_features,
+    build_windows,
+    cohort_from_challenge2019,
+    patient_level_split,
+)
 
 
-def run(psv_dir: str, use_gpu: bool = False, tune: bool = False, n_trials: int = 30, max_files: int | None = None) -> None:
+def run(
+    psv_dir: str,
+    use_gpu: bool = False,
+    tune: bool = False,
+    n_trials: int = 30,
+    max_files: int | None = None,
+    horizon_hours: int = PREDICTION_HORIZON_HOURS,
+    window_hours: int = OBSERVATION_WINDOW_HOURS,
+    gap_hours: int = GAP_HOURS,
+) -> None:
     """Load Challenge-2019 vitals and run XGBoost vs NEWS + the full report."""
     from vitals_phenotype import discover_phenotypes
     from vitals_report import render_report
@@ -33,9 +57,20 @@ def run(psv_dir: str, use_gpu: bool = False, tune: bool = False, n_trials: int =
         tune_xgboost,
     )
 
-    print(f"Loading Challenge-2019 PSVs from {psv_dir} (max_files={max_files}) ...")
+    print(
+        f"Loading Challenge-2019 PSVs from {psv_dir} (max_files={max_files}) | "
+        f"window={window_hours}h horizon={horizon_hours}h gap={gap_hours}h ..."
+    )
     cohort = cohort_from_challenge2019(psv_dir, max_files=max_files)
-    windowed = add_personalized_features(build_windows(cohort), cohort)
+    windowed = add_personalized_features(
+        build_windows(
+            cohort,
+            observation_window_hours=window_hours,
+            prediction_horizon_hours=horizon_hours,
+            gap_hours=gap_hours,
+        ),
+        cohort,
+    )
     positives = int(windowed.labels.sum())
     n_event = int(cohort.events["arrest_hour"].notna().sum())
     print(f"Patients: {cohort.vitals['patient_id'].nunique()} ({n_event} with event) | "
@@ -75,9 +110,19 @@ def main() -> None:
     if not positional:
         print(__doc__)
         return
-    trials = next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--trials=")), 30)
-    max_files = next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--max-files=")), None)
-    run(positional[0], use_gpu="--gpu" in sys.argv, tune="--tune" in sys.argv, n_trials=trials, max_files=max_files)
+    def _opt(name: str, default: int | None) -> int | None:
+        return next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith(f"--{name}=")), default)
+
+    run(
+        positional[0],
+        use_gpu="--gpu" in sys.argv,
+        tune="--tune" in sys.argv,
+        n_trials=_opt("trials", 30),
+        max_files=_opt("max-files", None),
+        horizon_hours=_opt("horizon", PREDICTION_HORIZON_HOURS),
+        window_hours=_opt("window", OBSERVATION_WINDOW_HOURS),
+        gap_hours=_opt("gap", GAP_HOURS),
+    )
 
 
 if __name__ == "__main__":
