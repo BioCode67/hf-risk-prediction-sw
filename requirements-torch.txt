@@ -1,0 +1,6 @@
+# Deep-learning benchmark track (LSTM/GRU) — GPU dev server only.
+# Kept separate from requirements.txt so the lightweight XGBoost pipeline and CI
+# stay torch-free. On the A6000 server install a CUDA build of torch:
+#   pip install -r requirements.txt -r requirements-torch.txt
+# (For CPU-only dev: pip install torch --index-url https://download.pytorch.org/whl/cpu)
+torch>=2.0.0
