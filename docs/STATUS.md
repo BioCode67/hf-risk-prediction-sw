@@ -33,7 +33,7 @@
   → 슬라이딩 윈도우 통계 피처(평균/표준편차/최소/최대/최근/추세/변화량 + shock index)
   → 개인 기저선 이탈 피처 + AGE/SEX 정적 피처
   → 라벨(within-patient, 향후 1h 내 심정지)
-  → cost-sensitive XGBoost  vs  NEWS(임상표준 baseline)
+  → cost-sensitive XGBoost (선택: Optuna 튜닝 / GPU) vs NEWS(임상표준 baseline)
   → 평가: AUPRC·AUROC·민감도@95%특이도·알람부담@민감도·lead-time
   → 설명(SHAP) + 발견(심정지 표현형 군집)
   → 발표용 그림 5종 자동 생성
@@ -52,20 +52,23 @@
 - 브랜치: claude/cardiac-arrest-early-warning-07fq9e (github.com/BioCode67/hf-risk-prediction-sw)
 - 모듈:
   - vitals_data.py     : 합성/KHTH/MIMIC 어댑터, 정제, 윈도우, 개인화·정적 피처, 분할, lead-time
-  - vitals_train.py    : XGBoost vs NEWS, AUPRC·민감도@특이도·알람부담·lead-time
+  - vitals_train.py    : XGBoost vs NEWS, AUPRC·민감도@특이도·알람부담·lead-time, Optuna 튜닝·GPU(CUDA)
   - vitals_explain.py  : SHAP(전역/윈도우별)
   - vitals_report.py   : 그림 5종(PR-curve·궤적·lead-time·알람부담) render_report()
   - vitals_phenotype.py: 심정지 표현형 군집 + 히트맵
   - mimic_explore.py   : 실 MIMIC-IV 탐색 + --scan-arrest/--arrest-counts/--model(원커맨드)
   - omop_explore.py    : OMOP CDM 탐색(참고)
-- 품질: 테스트 40개 green, CI(3.11/3.12) 반영, 전부 합성/네트워크 불필요로 항상 실행
-- 원커맨드: python src/mimic_explore.py <MIMIC경로> --model
-  → 지표 + 알람부담 + lead-time + 그림 5종 + 표현형 일괄 생성
+- 품질: 테스트 41개 green, CI(3.11/3.12) 반영, 전부 합성/네트워크 불필요로 항상 실행
+- 원커맨드: python src/mimic_explore.py <MIMIC경로> --model [--gpu] [--tune] [--trials=N]
+  → (Optuna 튜닝) + 지표 + 알람부담 + lead-time + 그림 5종 + 표현형 일괄 생성
+- 협업: 선생님(로컬)이 GPU/CUDA·Optuna·UTF-8 CLI 커밋 → 원커맨드에 통합 완료
 
 ## 7. 문서
 - docs/competition-strategy.md : 우승 전략 & 제안서 설계(배점 정렬)
-- docs/proposal-draft.md       : 예선 제안서 30장 골격 초안(예비수치·그림 반영)
+- docs/proposal-draft.md       : 예선 제안서 초안(전 절 확장 + 결과표 + 그림)
+- docs/differentiation.md      : 본선 발표·질의응답(Q&A) 대비 + 경쟁우위
 - docs/STATUS.md               : (본 문서) 프로젝트 현황 정리
+- 제안서 Word(docx) 초안 v3     : 채팅으로 전달(그림 5종·결과표 임베드)
 
 ## 8. 남은 일 (To-Do)
 - [ ] 전체 MIMIC-IV: CITI 인증 → 다운로드 → --model로 실학습 수치 산출
