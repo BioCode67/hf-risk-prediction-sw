@@ -38,7 +38,22 @@ python src/vitals_report.py                       # PR·알람부담·궤적·le
 python src/vitals_phenotype.py                    # 표현형 히트맵
 ```
 
-## 3. 실학습 — 전체 MIMIC-IV (CITI 인증 후)
+## 2b. 지금 바로 — 실제 오픈데이터로 (양성 표본 포함, 인증 불필요) ★추천
+심정지 특화 공개데이터(인증 없는)는 없다. 가장 가까운 **개방·즉시 사용 + 양성/대조군 모두** 있는
+대안은 **PhysioNet/CinC Challenge 2019(sepsis)** — 40k 환자, 시간별 활력징후 + 악화 라벨.
+심정지는 아니지만 "활력징후 → 임박 악화사건" 구조가 동일해 우리 파이프라인이 그대로 돈다.
+```bash
+# (a) 인증 없이 다운로드 (training_setA/B: p*.psv, 환자 1인당 1파일)
+wget -r -N -c -np https://physionet.org/files/challenge-2019/1.0.0/
+#    -> physionet.org/files/challenge-2019/1.0.0/training/training_setA
+# (b) 우리 파이프라인 그대로 (먼저 일부만 빠르게, 그다음 전체)
+python src/sepsis_explore.py <.../training_setA> --max-files=4000 --tune --gpu
+python src/sepsis_explore.py <.../training_setA> --tune --gpu           # 전체
+```
+출력: XGBoost vs NEWS(AUPRC·민감도@특이도·오경보) + 알람부담 + lead-time + 그림 5종 + 표현형.
+**대조군이 있어 오경보(특이도)를 진짜로 측정**할 수 있다 → 방법 검증에 이상적.
+
+## 3. 실학습 — 전체 MIMIC-IV (CITI 인증 후, 실제 심정지)
 Demo(100명)는 심정지가 거의 없어 학습 불가. **전체 MIMIC-IV**가 필요하다.
 ```bash
 # (a) PhysioNet CITI 인증 완료 후 다운로드 (개인 계정)

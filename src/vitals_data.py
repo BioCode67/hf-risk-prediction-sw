@@ -478,6 +478,88 @@ def cohort_from_mimic(
     return VitalSignsCohort(vitals=sanitize_vitals(vitals_wide), events=cohort_events)
 
 
+# --- PhysioNet Challenge 2019 adapter (open sepsis early-warning proxy) ----
+
+# Challenge-2019 PSV column -> our canonical vital name.
+_CHALLENGE2019_MAP: Final[dict[str, str]] = {
+    "HR": "pulse",
+    "SBP": "sbp",
+    "DBP": "dbp",
+    "Temp": "temperature",
+    "O2Sat": "spo2",
+    "Resp": "resp_rate",
+}
+
+
+def cohort_from_challenge2019(
+    psv_dir: str | Path,
+    column_map: dict[str, str] | None = None,
+    max_files: int | None = None,
+) -> VitalSignsCohort:
+    """Adapt the open PhysioNet/CinC Challenge 2019 (sepsis) data to a cohort.
+
+    This is the best **openly downloadable (no credentialing)** proxy with real
+    positives *and* controls: 40k ICU patients, hourly vitals + an hourly
+    deterioration (``SepsisLabel``) flag. The task shape — vitals time series →
+    predict an imminent deterioration event — matches this project's, so the
+    exact pipeline runs on it. (It is sepsis, not cardiac arrest; use it to
+    validate the method end-to-end while awaiting credentialed cardiac-arrest
+    data.)
+
+    Each ``*.psv`` file is one patient. ``arrest_hour`` is set to the first hour
+    the label turns positive (sepsis patients); patients that never turn positive
+    become controls. ``40k`` files are slow to read — pass ``max_files`` for a
+    quick subset.
+    """
+    column_map = column_map or _CHALLENGE2019_MAP
+    files = sorted(Path(psv_dir).glob("*.psv"))
+    if max_files is not None:
+        files = files[:max_files]
+    if not files:
+        raise FileNotFoundError(f"No .psv files found under '{psv_dir}'.")
+
+    vital_rows: list[dict[str, Any]] = []
+    event_rows: list[dict[str, Any]] = []
+    demo_rows: list[dict[str, Any]] = []
+
+    for path in files:
+        frame = pd.read_csv(path, sep="|")
+        patient_id = path.stem
+        base = frame["ICULOS"].to_numpy() if "ICULOS" in frame.columns else np.arange(len(frame))
+        hours = (base - base.min()).astype(int)
+
+        for i in range(len(frame)):
+            row: dict[str, Any] = {"patient_id": patient_id, "hour": int(hours[i])}
+            for src, dst in column_map.items():
+                row[dst] = float(frame[src].iloc[i]) if src in frame.columns else float("nan")
+            vital_rows.append(row)
+
+        if "SepsisLabel" in frame.columns and (frame["SepsisLabel"] == 1).any():
+            arrest_hour = float(hours[int(np.argmax(frame["SepsisLabel"].to_numpy() == 1))])
+        else:
+            arrest_hour = float("nan")
+        event_rows.append({"patient_id": patient_id, "arrest_hour": arrest_hour})
+        demo_rows.append(
+            {
+                "patient_id": patient_id,
+                "age": float(frame["Age"].iloc[0]) if "Age" in frame.columns else float("nan"),
+                "sex": float(frame["Gender"].iloc[0]) if "Gender" in frame.columns else float("nan"),
+            }
+        )
+
+    vitals = pd.DataFrame(vital_rows).groupby(["patient_id", "hour"], as_index=False).mean(numeric_only=True)
+    for vital_name in VITALS:
+        if vital_name not in vitals.columns:
+            vitals[vital_name] = np.nan
+    vitals = vitals[["patient_id", "hour", *VITALS]].sort_values(["patient_id", "hour"]).reset_index(drop=True)
+
+    return VitalSignsCohort(
+        vitals=sanitize_vitals(vitals),
+        events=pd.DataFrame(event_rows),
+        demographics=pd.DataFrame(demo_rows),
+    )
+
+
 # --- Windowing & labelling ------------------------------------------------
 
 
