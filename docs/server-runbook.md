@@ -1,0 +1,69 @@
+# GPU 서버 실행 런북 (개발·인턴 트랙)
+
+> 회사 GPU 서버(RTX A6000 ×2)에서 파이프라인을 GPU로 돌리는 절차.
+> **주의**: 이 서버는 개발·검증용이다. 공모전 **본선 안심존은 별개**(오프라인·CPU·사전신고
+> 패키지)이므로 개인 GPU를 쓸 수 없고, 안심존엔 코드만 반입한다.
+
+## 0. 접속 (회사망에서)
+```bash
+ssh jhkim@222.103.107.7 -p 4132   # 방화벽 IP 제한 → 회사망에서만
+nvidia-smi                        # A6000 ×2 보이는지 확인
+```
+
+## 1. 환경 구축 (최초 1회)
+```bash
+cd /workspace
+git clone https://github.com/BioCode67/hf-risk-prediction-sw.git
+cd hf-risk-prediction-sw
+git checkout claude/cardiac-arrest-early-warning-07fq9e
+
+python -m venv .venv && source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt          # xgboost>=2.0 = CUDA(device="cuda") 지원
+python -c "import xgboost; print('xgboost', xgboost.__version__)"
+```
+
+## 2. 지금 바로 — GPU + Optuna 스모크 테스트 (실데이터 불필요)
+합성 데이터로 GPU·Optuna 스택이 A6000에서 도는지 검증한다.
+```bash
+python src/vitals_train.py --gpu --tune          # Optuna 튜닝(GPU) + XGBoost vs NEWS
+# 다른 터미널에서: watch -n1 nvidia-smi  → 학습 중 GPU 사용률 확인
+```
+- 정상이면 Optuna best CV AUPRC 로그 + XGBoost/NEWS 지표가 출력된다.
+- `[gpu] CUDA unavailable ...` 가 뜨면 CPU로 자동 폴백된다(코드가 처리) → 드라이버/설치 점검.
+
+전체 리포트(그림 포함)까지 합성으로 보려면:
+```bash
+python src/vitals_report.py                       # PR·알람부담·궤적·lead-time 그림 생성(models/)
+python src/vitals_phenotype.py                    # 표현형 히트맵
+```
+
+## 3. 실학습 — 전체 MIMIC-IV (CITI 인증 후)
+Demo(100명)는 심정지가 거의 없어 학습 불가. **전체 MIMIC-IV**가 필요하다.
+```bash
+# (a) PhysioNet CITI 인증 완료 후 다운로드 (개인 계정)
+#     https://physionet.org/content/mimiciv/  (icu 모듈: chartevents, procedureevents, d_items, icustays)
+# (b) icu/ 폴더가 있는 경로를 지정해 원커맨드 실행
+python src/mimic_explore.py /workspace/mimic-iv/2.2 --model --tune --gpu --trials=50
+```
+출력: Optuna 튜닝 → 튜닝 XGBoost vs NEWS 지표 → 알람부담@민감도 → lead-time
+→ 그림 5종(models/) → 심정지 표현형. 한 줄로 본선 리포트 재료가 나온다.
+
+- GPU 확인: 학습 중 `nvidia-smi`에 python 프로세스 GPU 점유가 보여야 한다.
+- 대용량이면 `--trials`를 늘려도 A6000에서 빠르다(GPU의 실이득 구간).
+
+## 4. 산출물 회수
+```bash
+ls models/*.png models/*.json     # 그림·지표. git-ignore 대상이라 커밋 안 됨
+scp -P 4132 jhkim@222.103.107.7:/workspace/hf-risk-prediction-sw/models/*.png ./   # 로컬로 회수
+```
+
+## 체크리스트
+- [ ] `nvidia-smi` A6000 ×2 확인
+- [ ] `--gpu --tune` 합성 스모크 테스트 통과 (GPU 점유 확인)
+- [ ] (CITI 인증) 전체 MIMIC-IV 확보
+- [ ] `--model --tune --gpu` 실학습 → 그림·지표 회수
+- [ ] 결과 해석 → 제안서/발표 자료 반영
+
+> 안심존(본선)에는 이 코드를 **CPU·사전신고 패키지**(numpy·pandas·scikit-learn·xgboost·shap·
+> matplotlib)로 그대로 실행한다. GPU 옵션(`--gpu`)만 빼면 동일 파이프라인이다.
