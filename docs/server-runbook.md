@@ -53,6 +53,22 @@ python src/sepsis_explore.py <.../training_setA> --tune --gpu           # 전체
 출력: XGBoost vs NEWS(AUPRC·민감도@특이도·오경보) + 알람부담 + lead-time + 그림 5종 + 표현형.
 **대조군이 있어 오경보(특이도)를 진짜로 측정**할 수 있다 → 방법 검증에 이상적.
 
+## 2c. MIMIC-IV 접근 신청 (CITI + PhysioNet) — 며칠 소요
+MIMIC-IV("미믹 포")는 다운로드에 **credentialed 인증**이 필요하다(무료, 승인까지 수일~2주).
+1. **PhysioNet 계정** 생성: https://physionet.org/register/
+2. **CITI 교육 이수**: "Data or Specimens Only Research" 과정 수료 → 완료 리포트(PDF) 확보.
+   PhysioNet 프로필의 *Training* 항목에서 어떤 CITI 모듈이 필요한지 안내를 따른다.
+3. **Credentialing 신청**: PhysioNet 프로필 작성 + **레퍼런스**(본인 아닌 지도교수/멘토 등)를
+   기재 → 심사 승인 대기.
+4. 승인 후 **MIMIC-IV 프로젝트 페이지에서 DUA 서명**: https://physionet.org/content/mimiciv/
+5. **다운로드**(ICU 모듈 필수: chartevents, procedureevents, d_items, icustays):
+```bash
+wget -r -N -c -np --user <PhysioNet-ID> --ask-password \
+  https://physionet.org/files/mimiciv/3.1/     # 최신 v3.1 (icu/, hosp/)
+# 우리 어댑터는 icu 모듈을 사용 → .../mimiciv/3.1/icu 가 있는 경로를 --model 에 지정
+```
+> 인증 대기 동안 §2b(Challenge 2019)로 파이프라인·수치를 먼저 확보한다.
+
 ## 3. 실학습 — 전체 MIMIC-IV (CITI 인증 후, 실제 심정지)
 Demo(100명)는 심정지가 거의 없어 학습 불가. **전체 MIMIC-IV**가 필요하다.
 ```bash
