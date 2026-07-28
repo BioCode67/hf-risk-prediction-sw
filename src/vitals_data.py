@@ -723,20 +723,39 @@ def _load_challenge2012_outcomes(
 # --- Windowing & labelling ------------------------------------------------
 
 
-def _window_features(observation: pd.DataFrame) -> dict[str, float]:
-    """Compute per-vital statistics for a single observation window."""
-    feats: dict[str, float] = {}
-    hours = observation["hour"].to_numpy(dtype=float)
+def _least_squares_slope(x: np.ndarray, y: np.ndarray) -> float:
+    """Slope of the least-squares line through ``(x, y)``.
 
-    for vital in VITALS:
-        values = observation[vital].to_numpy(dtype=float)
-        mask = ~np.isnan(values)
+    Equivalent to ``np.polyfit(x, y, 1)[0]`` but without building and solving the
+    Vandermonde system. Windows hold a handful of points and there are hundreds
+    of thousands of them, so the setup cost dominates: this is the single most
+    expensive line in windowing otherwise.
+    """
+    x_centred = x - x.mean()
+    denominator = float(x_centred @ x_centred)
+    if denominator == 0.0:
+        return 0.0
+    return float(x_centred @ (y - y.mean()) / denominator)
+
+
+def _window_features_from_arrays(hours: np.ndarray, values: np.ndarray) -> dict[str, float]:
+    """Per-vital statistics for one window, given plain arrays.
+
+    ``values`` is ``[T, len(VITALS)]`` in ``VITALS`` order. Taking arrays rather
+    than a DataFrame keeps pandas out of the inner loop, where column access and
+    boolean masking cost more than the arithmetic they feed.
+    """
+    feats: dict[str, float] = {}
+
+    for index, vital in enumerate(VITALS):
+        column = values[:, index]
+        mask = ~np.isnan(column)
         if not mask.any():
             for stat in WINDOW_STATS:
                 feats[f"{vital}_{stat}"] = float("nan")
             continue
 
-        present = values[mask]
+        present = column[mask]
         present_hours = hours[mask]
         feats[f"{vital}_mean"] = float(present.mean())
         feats[f"{vital}_std"] = float(present.std())  # population std (ddof=0)
@@ -745,7 +764,7 @@ def _window_features(observation: pd.DataFrame) -> dict[str, float]:
         feats[f"{vital}_last"] = float(present[-1])
         feats[f"{vital}_delta"] = float(present[-1] - present[0])
         if present.size >= 2 and np.ptp(present_hours) > 0:
-            feats[f"{vital}_slope"] = float(np.polyfit(present_hours, present, 1)[0])
+            feats[f"{vital}_slope"] = _least_squares_slope(present_hours, present)
         else:
             feats[f"{vital}_slope"] = 0.0
 
@@ -762,6 +781,14 @@ def _window_features(observation: pd.DataFrame) -> dict[str, float]:
     )
 
     return {name: feats.get(name, float("nan")) for name in feature_names()}
+
+
+def _window_features(observation: pd.DataFrame) -> dict[str, float]:
+    """Compute per-vital statistics for a single observation window."""
+    return _window_features_from_arrays(
+        observation["hour"].to_numpy(dtype=float),
+        observation[list(VITALS)].to_numpy(dtype=float),
+    )
 
 
 def build_windows(
@@ -791,18 +818,26 @@ def build_windows(
     groups: list[int] = []
     times_to_arrest: list[float] = []
 
+    vital_columns = list(VITALS)
     for patient_id, group in cohort.vitals.groupby("patient_id"):
         group = group.sort_values("hour")
         arrest_hour = events.get(patient_id, float("nan"))
         has_arrest = arrest_hour is not None and np.isfinite(arrest_hour)
-        max_hour = int(group["hour"].max())
+
+        # Convert once per patient. Slicing the sorted hour array by index is
+        # what makes the inner loop cheap — masking the DataFrame per window
+        # rescans every row and rebuilds a frame each time.
+        patient_hours = group["hour"].to_numpy(dtype=float)
+        patient_values = group[vital_columns].to_numpy(dtype=float)
+        max_hour = int(patient_hours[-1])
 
         for end in range(observation_window_hours - 1, max_hour + 1, step_hours):
             if has_arrest and end >= arrest_hour:
                 continue  # cannot observe at/after the arrest
             low = end - observation_window_hours + 1
-            observation = group[(group["hour"] >= low) & (group["hour"] <= end)]
-            if len(observation) < min_rows:
+            start_i = int(np.searchsorted(patient_hours, low, side="left"))
+            stop_i = int(np.searchsorted(patient_hours, end, side="right"))
+            if stop_i - start_i < min_rows:
                 continue
 
             if has_arrest and (end + gap_hours) < arrest_hour <= (end + gap_hours + prediction_horizon_hours):
@@ -810,7 +845,11 @@ def build_windows(
             else:
                 label = 0
 
-            rows.append(_window_features(observation))
+            rows.append(
+                _window_features_from_arrays(
+                    patient_hours[start_i:stop_i], patient_values[start_i:stop_i]
+                )
+            )
             labels.append(label)
             groups.append(patient_id)
             times_to_arrest.append(float(arrest_hour - end) if has_arrest else float("nan"))
