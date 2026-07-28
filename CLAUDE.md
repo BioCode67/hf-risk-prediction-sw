@@ -47,13 +47,33 @@ src/vitals_explain.py  # SHAP drivers (global + per-window)
 src/vitals_report.py   # figures: PR-curve, trajectory, lead-time, alarm-burden (render_report)
 src/vitals_phenotype.py# unsupervised cardiac-arrest phenotype clustering + heatmap
 src/mimic_explore.py   # real MIMIC-IV: explore + --scan-arrest/--arrest-counts/--model
+src/sepsis_explore.py  # PhysioNet Challenge 2019 (open, no credentialing): --horizon/--tune/--gpu
 src/omop_explore.py    # explore any OMOP CDM CSV folder (Eunomia / competition sample)
 
+# deep-learning benchmark (torch; requirements-torch.txt, excluded from CI import check)
+src/utils.py           # forward-fill -> mean/zero impute -> z-score
+src/dataset.py         # variable-length sequence batching (pad + mask)
+src/model.py           # LSTM/GRU classifier
+train_dl.py            # (repo root) DL training entry point
+
+notebooks/01_baseline_pipeline.ipynb       # 4-stage walkthrough of this project's pipeline
+notebooks/02_learning_project.ipynb        # standard tabular-ML workflow on Pima (teaching)
+notebooks/03_challenge2019_realdata.ipynb  # real Challenge-2019 data walkthrough
+
+README.md      # Korean; structure map + command table + how to read the metrics
+src/README.md  # Korean; module map + why src/ must stay flat
+docs/README.md # Korean; index of the docs below
 docs/competition-strategy.md  # 공모전 우승 전략 & 제안서 설계 (rubric 정렬)
 docs/proposal-draft.md        # 예선 제안서 30장 골격 초안
-tests/  # test_pipeline.py (static) + test_vitals/_mimic/_omop/_report.py (time-series)
+docs/differentiation.md       # 본선 발표·Q&A 대비
+docs/STATUS.md                # 현재 진행 상황
+docs/server-runbook.md        # GPU 서버 구축·실행 (conda, VS Code, 함정 모음)
+tests/  # test_pipeline.py (static) + test_vitals/_mimic/_omop/_report/_sepsis/_torch (time-series)
 .github/workflows/ci.yml  # imports check + pytest on Python 3.11 & 3.12
 ```
+
+Docs are written in **Korean** for the user; code, docstrings and commit
+messages stay in English. Keep it that way when editing.
 
 Two independent pipelines share the repo. The **time-series track** is the
 2026 K-Health 미개방 의료데이터 경진대회 entry (경북대병원 활력징후 →
