@@ -71,6 +71,7 @@ docs/STATUS.md                # 현재 진행 상황
 docs/server-runbook.md        # GPU 서버 구축·실행 (conda, VS Code, 함정 모음)
 tests/  # test_vitals/_mimic/_omop/_report/_sepsis/_mortality/_torch (active, time-series)
 conftest.py  # repo root: puts BOTH src/ and legacy/ on sys.path for pytest
+scripts/fetch_data.sh  # download the open PhysioNet sets (challenge2012 | challenge2019 | all)
 
 # archived static heart-failure track (one row per patient) — NOT the competition entry
 legacy/data_loader.py    # load/unzip, StandardScaler, stratified split, to_omop_cdm()

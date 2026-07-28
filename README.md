@@ -137,19 +137,33 @@ python src/vitals_phenotype.py
 
 ### 실제 공개 데이터로 돌려보기
 
-PhysioNet Challenge 2019(패혈증)은 인증 없이 다운로드할 수 있어서, 실데이터 검증용 프록시로
-씁니다. 심정지는 아니지만 "활력징후 → 임박한 악화 사건"이라는 문제 구조가 같습니다.
+인증 없이 받을 수 있는 PhysioNet 공개 데이터 두 종을 씁니다. 심정지는 아니지만
+"활력징후 → 임박한 악화 사건"이라는 문제 구조가 같아서, 파이프라인을 실데이터로 검증하는
+프록시 역할을 합니다.
+
+| 데이터 | 사건 | 규모 |
+|---|---|---|
+| Challenge 2012 | ICU 원내 사망 | 4,000명 / 27MB |
+| Challenge 2019 | 패혈증 | 20,000명 / 140MB |
 
 ```bash
-# 데이터 다운로드
-wget -r -N -c -np -nH --cut-dirs=4 \
-  https://physionet.org/files/challenge-2019/1.0.0/training/training_setA/
+scripts/fetch_data.sh challenge2012      # data/ 에 받음 (몇 분)
+scripts/fetch_data.sh all                # 둘 다
 
-# 실행 (--horizon: 예측 지평, 아래 주의사항 참고)
-python src/sepsis_explore.py ./training_setA --horizon=6
+# 다른 위치에 받으려면
+DATA_DIR=/workspace/data scripts/fetch_data.sh challenge2012
+```
 
-# 전체 데이터 + 튜닝 + GPU
-python src/sepsis_explore.py ./training_setA --horizon=6 --tune --trials=50 --gpu
+받은 뒤 실행 (스크립트가 끝나면 알맞은 명령을 출력해줍니다):
+
+```bash
+python src/mortality_explore.py data/challenge2012/set-a \
+  --outcomes=data/challenge2012/Outcomes-a.txt --horizon=6
+
+python src/sepsis_explore.py data/challenge2019/training_setA --horizon=6
+
+# 전체 + 튜닝 + GPU
+python src/sepsis_explore.py data/challenge2019/training_setA --horizon=6 --tune --trials=50 --gpu
 ```
 
 > `--horizon` 기본값 1시간은 너무 좁습니다. 환자당 이벤트가 1개뿐이라 양성 윈도우가
@@ -162,6 +176,7 @@ python src/sepsis_explore.py ./training_setA --horizon=6 --tune --trials=50 --gp
 
 | 하고 싶은 것 | 명령어 |
 |---|---|
+| 공개 데이터 내려받기 | `scripts/fetch_data.sh challenge2012` |
 | 합성 데이터로 학습 | `python src/vitals_train.py` |
 | Optuna 하이퍼파라미터 튜닝 | `python src/vitals_train.py --tune --trials 40` |
 | GPU로 학습 | `python src/vitals_train.py --gpu` |
@@ -282,6 +297,16 @@ ROC는 높은데 AUPRC는 바닥인 상황이 흔합니다. 이 프로젝트가 
 
 즉 시계열 트랙은 데이터 없이 바로 실행됩니다. 정적 트랙까지 돌리려면
 [`legacy/README.md`](legacy/README.md)를 참고하세요.
+
+### 왜 데이터를 git에 안 올리나
+
+용량 때문만은 아닙니다. MIMIC-IV는 이용 약관(DUA)이 재배포를 금지하고, 경북대 데이터는
+안심존 반출 자체가 심의 대상입니다. `data/`를 파일 단위가 아니라 통째로 git-ignore한 이유는,
+언젠가 `git add`를 잘못 눌러도 제한 데이터가 올라갈 수 없게 만들기 위해서입니다.
+한 번 커밋되면 force push로도 완전히 지우기 어렵고, 이미 clone한 쪽에는 그대로 남습니다.
+
+공개 데이터(Challenge 2012/2019)는 재배포가 허용되지만, "데이터를 커밋하는 저장소"가 되는
+순간 위 사고 위험이 생기므로 똑같이 제외하고 `scripts/fetch_data.sh`로 받습니다.
 
 ---
 
