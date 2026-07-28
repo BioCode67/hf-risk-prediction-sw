@@ -17,7 +17,8 @@
 | `generate_synthetic_cohort()` | 합성 환자 생성 (데이터 없이 실행 가능) |
 | `cohort_from_khth()` | 경북대 데이터 어댑터 (본선) |
 | `cohort_from_mimic()` | MIMIC-IV 어댑터 |
-| `cohort_from_challenge2019()` | PhysioNet Challenge 2019 어댑터 |
+| `cohort_from_challenge2019()` | PhysioNet Challenge 2019 어댑터 (패혈증) |
+| `cohort_from_challenge2012()` | PhysioNet Challenge 2012 어댑터 (ICU 사망, 4,000명) |
 | `sanitize_vitals()` | 불가능한 값 제거, 화씨→섭씨 변환 |
 | `build_windows()` | 슬라이딩 윈도우 + "N시간 내 심정지" 라벨링 |
 | **`add_personalized_features()`** | ★ 개인 기저선 대비 편차 — **차별점** |
@@ -57,7 +58,8 @@ SHAP으로 전역 기여도와 개별 윈도우 근거를 뽑습니다.
 
 | 파일 | 대상 | 주요 옵션 |
 |---|---|---|
-| `sepsis_explore.py` | PhysioNet Challenge 2019 | `--horizon` `--tune` `--gpu` `--max-files` |
+| `sepsis_explore.py` | PhysioNet Challenge 2019 (패혈증) | `--horizon` `--tune` `--gpu` `--max-files` |
+| `mortality_explore.py` | PhysioNet Challenge 2012 (ICU 사망) | `--horizon` `--outcomes` `--tune` `--gpu` |
 | `mimic_explore.py` | MIMIC-IV | `--model` `--scan-arrest` `--arrest-counts` `--gpu` |
 | `omop_explore.py` | OMOP CDM 폴더 | — |
 

@@ -56,7 +56,8 @@ hf-risk-prediction-sw/
 │   │
 │   │  ── 데이터 어댑터 ── 여러 데이터를 같은 파이프라인에 연결
 │   ├── mimic_explore.py        MIMIC-IV (실제 중환자 데이터)
-│   ├── sepsis_explore.py       PhysioNet Challenge 2019 (공개, 인증 불필요)
+│   ├── sepsis_explore.py       PhysioNet Challenge 2019 — 패혈증 (공개)
+│   ├── mortality_explore.py    PhysioNet Challenge 2012 — ICU 사망 (공개, 4,000명)
 │   ├── omop_explore.py         OMOP CDM 표준 포맷
 │   │
 │   │  ── 딥러닝 벤치마크 ── XGBoost와 비교용 (선택)
@@ -166,6 +167,7 @@ python src/sepsis_explore.py ./training_setA --horizon=6 --tune --trials=50 --gp
 | 그림 전부 생성 | `python src/vitals_report.py` |
 | 심정지 표현형 군집 | `python src/vitals_phenotype.py` |
 | Challenge 2019 실행 | `python src/sepsis_explore.py <폴더> --horizon=6` |
+| Challenge 2012 실행 | `python src/mortality_explore.py <폴더> --horizon=6` |
 | MIMIC-IV 구조 확인 | `python src/mimic_explore.py <폴더>` |
 | MIMIC-IV 전체 실행 | `python src/mimic_explore.py <폴더> --model --gpu` |
 | 딥러닝(LSTM) 학습 | `python train_dl.py --rnn lstm --epochs 20` |

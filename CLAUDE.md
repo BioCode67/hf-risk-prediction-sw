@@ -45,7 +45,8 @@ src/vitals_explain.py  # SHAP drivers (global + per-window)
 src/vitals_report.py   # figures: PR-curve, trajectory, lead-time, alarm-burden (render_report)
 src/vitals_phenotype.py# unsupervised cardiac-arrest phenotype clustering + heatmap
 src/mimic_explore.py   # real MIMIC-IV: explore + --scan-arrest/--arrest-counts/--model
-src/sepsis_explore.py  # PhysioNet Challenge 2019 (open, no credentialing): --horizon/--tune/--gpu
+src/sepsis_explore.py  # PhysioNet Challenge 2019 sepsis (open): --horizon/--tune/--gpu
+src/mortality_explore.py # PhysioNet Challenge 2012 ICU mortality (open, 4k/set): --horizon/--outcomes
 src/omop_explore.py    # explore any OMOP CDM CSV folder (Eunomia / competition sample)
 
 # deep-learning benchmark (torch; requirements-torch.txt, excluded from CI import check)
@@ -66,7 +67,7 @@ docs/proposal-draft.md        # 예선 제안서 30장 골격 초안
 docs/differentiation.md       # 본선 발표·Q&A 대비
 docs/STATUS.md                # 현재 진행 상황
 docs/server-runbook.md        # GPU 서버 구축·실행 (conda, VS Code, 함정 모음)
-tests/  # test_vitals/_mimic/_omop/_report/_sepsis/_torch (active, time-series)
+tests/  # test_vitals/_mimic/_omop/_report/_sepsis/_mortality/_torch (active, time-series)
 conftest.py  # repo root: puts BOTH src/ and legacy/ on sys.path for pytest
 
 # archived static heart-failure track (one row per patient) — NOT the competition entry
@@ -103,10 +104,11 @@ python src/vitals_explain.py    # SHAP drivers
 python src/vitals_report.py     # figures -> models/
 python src/vitals_phenotype.py  # arrest phenotype clustering
 
-python src/sepsis_explore.py <dir> --horizon=6   # real Challenge-2019 data
+python src/sepsis_explore.py <dir> --horizon=6    # real Challenge-2019 data (sepsis)
+python src/mortality_explore.py <dir> --horizon=6 # real Challenge-2012 data (ICU mortality)
 python src/mimic_explore.py <dir> --model --gpu  # real MIMIC-IV
 
-pytest -q                       # test suite (46 pass, 11 skip on a fresh clone)
+pytest -q                       # test suite (55 pass, 11 skip on a fresh clone)
 
 # archived static track (needs data/)
 python legacy/train.py

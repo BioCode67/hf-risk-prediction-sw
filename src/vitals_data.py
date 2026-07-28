@@ -560,6 +560,166 @@ def cohort_from_challenge2019(
     )
 
 
+# Challenge 2012 records vitals in long form (Time, Parameter, Value). Invasive
+# arterial lines are preferred when present, with the non-invasive cuff as a
+# fallback, because both appear and the invasive trace is the more reliable one.
+_CHALLENGE2012_MAP: Final[dict[str, str]] = {
+    "HR": "pulse",
+    "SysABP": "sbp",
+    "NISysABP": "sbp",
+    "DiasABP": "dbp",
+    "NIDiasABP": "dbp",
+    "Temp": "temperature",
+    "SaO2": "spo2",
+    "RespRate": "resp_rate",
+}
+# Preferred source wins when a patient has both an invasive and a cuff reading.
+_CHALLENGE2012_PRIORITY: Final[dict[str, tuple[str, ...]]] = {
+    "sbp": ("SysABP", "NISysABP"),
+    "dbp": ("DiasABP", "NIDiasABP"),
+}
+
+
+def _parse_challenge2012_record(path: Path) -> tuple[pd.DataFrame, dict[str, float]]:
+    """Parse one Challenge-2012 ``.txt`` record into hourly vitals + demographics."""
+    frame = pd.read_csv(path, dtype={"Time": str, "Parameter": str})
+    frame["Value"] = pd.to_numeric(frame["Value"], errors="coerce")
+    # The challenge encodes missing descriptors as -1 rather than leaving them out.
+    frame.loc[frame["Value"] < 0, "Value"] = np.nan
+
+    hhmm = frame["Time"].str.split(":", expand=True)
+    frame["hour"] = pd.to_numeric(hhmm[0], errors="coerce")
+
+    descriptors = frame[frame["Parameter"].isin(("Age", "Gender"))]
+    demographics = {
+        "age": float(descriptors.loc[descriptors["Parameter"] == "Age", "Value"].mean()),
+        "sex": float(descriptors.loc[descriptors["Parameter"] == "Gender", "Value"].mean()),
+    }
+
+    series = frame[frame["Parameter"].isin(_CHALLENGE2012_MAP)].dropna(subset=["hour", "Value"])
+    if series.empty:
+        return pd.DataFrame(columns=["hour", *VITALS]), demographics
+
+    # Average repeated readings within the same hour, then reshape to one row per hour.
+    hourly = (
+        series.groupby(["hour", "Parameter"], as_index=False)["Value"]
+        .mean()
+        .pivot(index="hour", columns="Parameter", values="Value")
+    )
+
+    out = pd.DataFrame(index=hourly.index)
+    for vital in VITALS:
+        sources = _CHALLENGE2012_PRIORITY.get(
+            vital, tuple(src for src, dst in _CHALLENGE2012_MAP.items() if dst == vital)
+        )
+        column = pd.Series(np.nan, index=hourly.index, dtype=float)
+        for source in sources:  # first source wins, later ones fill its gaps
+            if source in hourly.columns:
+                column = column.fillna(hourly[source])
+        out[vital] = column
+
+    return out.reset_index().rename(columns={"index": "hour"}), demographics
+
+
+def cohort_from_challenge2012(
+    data_dir: str | Path,
+    outcomes_path: str | Path | None = None,
+    max_files: int | None = None,
+) -> VitalSignsCohort:
+    """Adapt the open PhysioNet/CinC Challenge 2012 (ICU mortality) data to a cohort.
+
+    Openly downloadable without credentialing: 4,000 ICU stays per set, the first
+    48 hours of each, with 36 irregularly sampled vitals and labs in long form
+    (``Time,Parameter,Value``). Used here as a larger real-data proxy than
+    Challenge 2019 — enough patients to tell a genuine model difference from
+    sampling noise.
+
+    **Labelling.** ``Outcomes-*.txt`` gives ``Survival`` (days from admission to
+    death) and ``In-hospital_death``. For in-hospital deaths with a known
+    survival time, ``arrest_hour`` is set to ``Survival * 24``; everyone else is
+    a control. Deaths falling after the 48-hour record simply produce no positive
+    window, so they act as controls for a "death within the next N hours"
+    question — which is the honest reading of them. Note ``Survival`` is recorded
+    in whole days, so event times are coarse.
+
+    Args:
+        data_dir: directory holding the per-patient ``.txt`` records.
+        outcomes_path: ``Outcomes-a.txt``; defaults to a sibling or in-directory
+            file. Without it every patient becomes a control.
+        max_files: read only the first N records (for quick runs).
+    """
+    directory = Path(data_dir)
+    files = sorted(p for p in directory.glob("*.txt") if not p.name.lower().startswith("outcomes"))
+    if max_files is not None:
+        files = files[:max_files]
+    if not files:
+        raise FileNotFoundError(f"No Challenge-2012 .txt records found under '{directory}'.")
+
+    outcomes = _load_challenge2012_outcomes(directory, outcomes_path)
+
+    vital_frames: list[pd.DataFrame] = []
+    event_rows: list[dict[str, Any]] = []
+    demo_rows: list[dict[str, Any]] = []
+
+    for path in files:
+        hourly, demographics = _parse_challenge2012_record(path)
+        patient_id = path.stem
+        if not hourly.empty:
+            hourly = hourly.assign(patient_id=patient_id)
+            hourly["hour"] = hourly["hour"].astype(int)
+            vital_frames.append(hourly)
+
+        event_rows.append({"patient_id": patient_id, "arrest_hour": outcomes.get(patient_id, float("nan"))})
+        demo_rows.append({"patient_id": patient_id, **demographics})
+
+    if not vital_frames:
+        raise ValueError(f"No usable vital-sign rows parsed from '{directory}'.")
+
+    vitals = pd.concat(vital_frames, ignore_index=True)
+    for vital_name in VITALS:
+        if vital_name not in vitals.columns:
+            vitals[vital_name] = np.nan
+    vitals = vitals[["patient_id", "hour", *VITALS]].sort_values(["patient_id", "hour"]).reset_index(drop=True)
+
+    return VitalSignsCohort(
+        vitals=sanitize_vitals(vitals),
+        events=pd.DataFrame(event_rows),
+        demographics=pd.DataFrame(demo_rows),
+    )
+
+
+def _load_challenge2012_outcomes(
+    directory: Path, outcomes_path: str | Path | None
+) -> dict[str, float]:
+    """Map ``RecordID -> arrest_hour`` from an ``Outcomes-*.txt`` file.
+
+    Returns an empty mapping (every patient a control) when no outcomes file is
+    found, so the adapter still runs on records alone.
+    """
+    if outcomes_path is not None:
+        candidate = Path(outcomes_path)
+    else:
+        found = sorted(directory.glob("Outcomes-*.txt")) + sorted(directory.parent.glob("Outcomes-*.txt"))
+        if not found:
+            print(f"[challenge2012] No Outcomes-*.txt near '{directory}' — all patients treated as controls.")
+            return {}
+        candidate = found[0]
+
+    if not candidate.exists():
+        raise FileNotFoundError(f"Outcomes file not found: {candidate}")
+
+    frame = pd.read_csv(candidate)
+    required = {"RecordID", "Survival", "In-hospital_death"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"{candidate} is missing column(s): {sorted(missing)}")
+
+    died = frame["In-hospital_death"] == 1
+    known = frame["Survival"] >= 0
+    events = frame[died & known]
+    return {str(int(r.RecordID)): float(r.Survival) * 24.0 for r in events.itertuples()}
+
+
 # --- Windowing & labelling ------------------------------------------------
 
 
