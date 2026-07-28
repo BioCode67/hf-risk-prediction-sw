@@ -12,6 +12,10 @@ mimic-demo/
 # Model side-artifacts
 models/*.png
 models/*.json
+# Per-run copies kept so one experiment's figures survive the next run, which
+# would otherwise overwrite models/*.png in place. Derived from restricted data,
+# so ignored wholesale like the rest of models/.
+models/runs/
 
 # ---- Python ----
 __pycache__/

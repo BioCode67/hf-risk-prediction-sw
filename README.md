@@ -20,6 +20,28 @@
 
 ---
 
+## 내 노트북에서 처음부터 (GPU 없이, 15분)
+
+```bash
+git clone https://github.com/BioCode67/hf-risk-prediction-sw.git
+cd hf-risk-prediction-sw
+
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-notebook.txt
+
+scripts/fetch_data.sh challenge2019 --limit=3000      # 공개 데이터, ~2분, 25MB
+jupyter lab notebooks/05_challenge2019_sepsis.ipynb
+```
+
+데이터는 git에 없습니다 (제한 데이터 유출 방지를 위해 `data/`를 통째로 제외). 위 스크립트가
+공개 데이터를 받아옵니다 — 로그인 불필요(ODC-BY), 중간에 끊겨도 다시 실행하면 이어받습니다.
+전체 20,336명이 필요하면 `--limit` 없이 실행하세요 (~10분, 162MB).
+
+GPU는 필요 없습니다. 노트북 기본 설정이 CPU이고, 데이터를 3,000명으로 줄이면 전 과정이
+노트북 컴퓨터에서 몇 분 안에 돕니다.
+
+---
+
 ## 처음 오셨나요? — 읽는 순서
 
 | 순서 | 무엇을 | 어디서 |
@@ -29,7 +51,8 @@
 | 3 | 이 프로젝트 파이프라인 체험 | [`notebooks/01_baseline_pipeline.ipynb`](notebooks/01_baseline_pipeline.ipynb) |
 | 4 | 시계열 파이프라인 이해 (윈도우·누수·알람부담) | [`notebooks/04_challenge2012_timeseries.ipynb`](notebooks/04_challenge2012_timeseries.ipynb) ← 실데이터 없어도 실행됨 |
 | 5 | 실데이터로 돌려보기 | [`notebooks/03_challenge2019_realdata.ipynb`](notebooks/03_challenge2019_realdata.ipynb) |
-| 6 | 대회 전략·제안서 | [`docs/`](docs/README.md) |
+| 6 | 핵심 주장 검증 (오탐 감소가 진짜인가) | [`notebooks/05_challenge2019_sepsis.ipynb`](notebooks/05_challenge2019_sepsis.ipynb) ← 알람부담의 함정·seed 재현성 |
+| 7 | 대회 전략·제안서 | [`docs/`](docs/README.md) |
 
 > 처음이라면 2번 노트북부터 여세요. 본 과제 데이터는 양성이 1% 남짓이라 지표가 늘 바닥에
 > 붙어 있어서 배우기가 어렵습니다. 2번은 신호가 뚜렷한 데이터로 흐름만 먼저 익히는 용도입니다.
@@ -45,7 +68,8 @@ hf-risk-prediction-sw/
 │   ├── 01_baseline_pipeline.ipynb       프로젝트 파이프라인 4단계 체험
 │   ├── 02_learning_project.ipynb        ML 표준 흐름 학습용 (권장 시작점)
 │   ├── 03_challenge2019_realdata.ipynb  실제 공개 데이터로 검증
-│   └── 04_challenge2012_timeseries.ipynb 시계열 파이프라인 학습용 (권장 2번째)
+│   ├── 04_challenge2012_timeseries.ipynb 시계열 파이프라인 학습용 (권장 2번째)
+│   └── 05_challenge2019_sepsis.ipynb    핵심 주장 검증 (알람부담·seed 재현성)
 │
 ├── src/                          ← 실제 코드 (아래 3개 트랙으로 나뉨)
 │   │

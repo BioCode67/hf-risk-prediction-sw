@@ -11,7 +11,11 @@ Download (no login):
 
 Run:
     python src/sepsis_explore.py /path/to/training_setA [--gpu] [--tune] [--trials=N]
-        [--max-files=N] [--horizon=H] [--window=W] [--gap=G]
+        [--max-files=N] [--horizon=H] [--window=W] [--gap=G] [--seed=S]
+
+``--seed`` drives the patient-level split, the Optuna sampler and XGBoost alike, so
+re-running with a different seed re-draws the test patients. A margin over NEWS that
+moves when the seed does is split noise, not a result — always check more than one.
 
 The prediction horizon defaults to 1 hour, which is deliberately strict: with one
 event per patient and a 1-hour horizon only ~one window per patient is positive, so
@@ -45,6 +49,7 @@ def run(
     horizon_hours: int = PREDICTION_HORIZON_HOURS,
     window_hours: int = OBSERVATION_WINDOW_HOURS,
     gap_hours: int = GAP_HOURS,
+    seed: int = 42,
 ) -> None:
     """Load Challenge-2019 vitals and run XGBoost vs NEWS + the full report."""
     from vitals_phenotype import discover_phenotypes
@@ -59,7 +64,7 @@ def run(
 
     print(
         f"Loading Challenge-2019 PSVs from {psv_dir} (max_files={max_files}) | "
-        f"window={window_hours}h horizon={horizon_hours}h gap={gap_hours}h ..."
+        f"window={window_hours}h horizon={horizon_hours}h gap={gap_hours}h seed={seed} ..."
     )
     cohort = cohort_from_challenge2019(psv_dir, max_files=max_files)
     windowed = add_personalized_features(
@@ -79,9 +84,9 @@ def run(
         print("Too few positive windows — increase --max-files.")
         return
 
-    split = patient_level_split(windowed)
-    best = tune_xgboost(split, n_trials=n_trials, use_gpu=use_gpu) if tune else {}
-    model, xgb = train_xgboost(split, use_gpu=use_gpu, **best)
+    split = patient_level_split(windowed, seed=seed)
+    best = tune_xgboost(split, n_trials=n_trials, use_gpu=use_gpu, seed=seed) if tune else {}
+    model, xgb = train_xgboost(split, use_gpu=use_gpu, random_state=seed, **best)
     news = evaluate_news_baseline(split)
     for m in (xgb, news):
         print(
@@ -122,6 +127,7 @@ def main() -> None:
         horizon_hours=_opt("horizon", PREDICTION_HORIZON_HOURS),
         window_hours=_opt("window", OBSERVATION_WINDOW_HOURS),
         gap_hours=_opt("gap", GAP_HOURS),
+        seed=_opt("seed", 42),
     )
 
 

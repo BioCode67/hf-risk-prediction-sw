@@ -60,6 +60,9 @@ notebooks/02_learning_project.ipynb        # standard tabular-ML workflow on Pim
 notebooks/03_challenge2019_realdata.ipynb  # real Challenge-2019 data walkthrough
 notebooks/04_challenge2012_timeseries.ipynb# time-series pipeline taught on Challenge-2012
                                            #   (self-generates a demo cohort if data is absent)
+notebooks/05_challenge2019_sepsis.ipynb    # verifies the false-alarm claim on Challenge-2019:
+                                           #   alarm burden at matched 50/70/90% sensitivity,
+                                           #   why the 90% comparison is degenerate, seed repeats
 
 README.md      # Korean; structure map + command table + how to read the metrics
 src/README.md  # Korean; module map + why src/ must stay flat

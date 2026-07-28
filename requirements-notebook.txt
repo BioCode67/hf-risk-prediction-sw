@@ -1,0 +1,7 @@
+# Running the notebooks in notebooks/ — not needed for the CLI pipeline or CI,
+# which is why these are kept out of requirements.txt.
+#
+#   pip install -r requirements.txt -r requirements-notebook.txt
+#   jupyter lab notebooks/05_challenge2019_sepsis.ipynb
+jupyterlab>=4.0.0
+ipykernel>=6.25.0
