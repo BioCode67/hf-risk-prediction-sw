@@ -1,10 +1,10 @@
 # `src/` 모듈 지도
 
-어떤 파일이 무슨 일을 하는지, **어떤 순서로 불리는지** 정리했습니다.
+어떤 파일이 무슨 일을 하는지, 어떤 순서로 불리는지 정리했습니다.
 
 ---
 
-## ⏱ 시계열 트랙 — 이 프로젝트의 본체
+## 시계열 트랙 — 이 프로젝트의 본체
 
 활력징후 시계열로 심정지를 조기경보합니다. 실행 순서대로:
 
@@ -21,7 +21,7 @@
 | `cohort_from_challenge2012()` | PhysioNet Challenge 2012 어댑터 (ICU 사망, 4,000명) |
 | `sanitize_vitals()` | 불가능한 값 제거, 화씨→섭씨 변환 |
 | `build_windows()` | 슬라이딩 윈도우 + "N시간 내 심정지" 라벨링 |
-| **`add_personalized_features()`** | ★ 개인 기저선 대비 편차 — **차별점** |
+| `add_personalized_features()` | 개인 기저선 대비 편차 — 차별점 |
 | `add_static_features()` | 연령대·성별 추가 |
 | `patient_level_split()` | 환자 단위 분할 (누수 방지) |
 
@@ -35,7 +35,7 @@
 | `tune_xgboost()` | Optuna 튜닝 (환자 그룹 CV, AUPRC 최적화) |
 | `compute_news_scores()` | NEWS 임상 점수 (비교군) |
 | `evaluate()` | AUPRC·ROC·민감도@특이도 계산 |
-| **`alarm_burden()`** | ★ 동일 민감도에서의 알람 횟수 — **핵심 지표** |
+| `alarm_burden()` | 동일 민감도에서의 알람 횟수 — 핵심 지표 |
 | `lead_time_summary()` | 사건 몇 시간 전에 경보했는지 |
 
 ### `vitals_explain.py` — 설명
@@ -52,7 +52,7 @@ SHAP으로 전역 기여도와 개별 윈도우 근거를 뽑습니다.
 
 ---
 
-## 🔌 데이터 탐색·실행 도구
+## 데이터 탐색·실행 도구
 
 각 데이터를 한 번의 명령으로 끝까지 돌리는 진입점입니다.
 
@@ -65,7 +65,7 @@ SHAP으로 전역 기여도와 개별 윈도우 근거를 뽑습니다.
 
 ---
 
-## 🤖 딥러닝 벤치마크 (선택)
+## 딥러닝 벤치마크 (선택)
 
 멘토 요청으로 만든 XGBoost 대조군입니다. torch가 필요하며,
 `requirements-torch.txt`로 따로 설치합니다 (CI는 torch 없이 돕니다).
@@ -80,15 +80,15 @@ SHAP으로 전역 기여도와 개별 윈도우 근거를 뽑습니다.
 
 ---
 
-## ⚠️ 구조에 관한 중요한 제약
+## 구조에 관한 중요한 제약
 
-**`src/`는 설치되는 패키지가 아니라 import 경로입니다.**
+`src/`는 설치되는 패키지가 아니라 import 경로입니다.
 
 모듈끼리 이렇게 부릅니다:
 
 ```python
-from vitals_data import build_windows      # ✅ 현재 방식
-from src.vitals_data import build_windows  # ❌ 작동하지 않음
+from vitals_data import build_windows      # 현재 방식
+from src.vitals_data import build_windows  # 작동하지 않음
 ```
 
 이게 성립하는 이유는 각 진입점이 `src/`를 경로에 넣기 때문입니다:
@@ -100,7 +100,7 @@ from src.vitals_data import build_windows  # ❌ 작동하지 않음
 | CI | `sys.path.insert(0, 'src')` |
 | 노트북 | `sys.path.insert(0, str(REPO / "src"))` |
 
-그래서 **파일을 하위 폴더로 옮기면 위 네 곳이 전부 깨집니다.** 폴더로 나누는 대신
+그래서 파일을 하위 폴더로 옮기면 위 네 곳이 전부 깨집니다. 폴더로 나누는 대신
 파일명 접두사(`vitals_*`, `*_explore`)로 트랙을 구분하고 있습니다.
 
 바꿔야 한다면 네 진입점을 모두 함께 수정하고 `pytest -q`로 검증하세요.
