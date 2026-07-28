@@ -27,8 +27,9 @@
 | 1 | **ML 흐름 익히기** (EDA→FE→모델→튜닝→앙상블) | [`notebooks/02_learning_project.ipynb`](notebooks/02_learning_project.ipynb) ← 42초면 끝, 여기부터 |
 | 2 | 지표 읽는 법 | 아래 [핵심 개념](#핵심-개념--지표-읽는-법) 절 |
 | 3 | 이 프로젝트 파이프라인 체험 | [`notebooks/01_baseline_pipeline.ipynb`](notebooks/01_baseline_pipeline.ipynb) |
-| 4 | 실데이터로 돌려보기 | [`notebooks/03_challenge2019_realdata.ipynb`](notebooks/03_challenge2019_realdata.ipynb) |
-| 5 | 대회 전략·제안서 | [`docs/`](docs/README.md) |
+| 4 | **시계열 파이프라인 이해** (윈도우·누수·알람부담) | [`notebooks/04_challenge2012_timeseries.ipynb`](notebooks/04_challenge2012_timeseries.ipynb) ← 실데이터 없어도 실행됨 |
+| 5 | 실데이터로 돌려보기 | [`notebooks/03_challenge2019_realdata.ipynb`](notebooks/03_challenge2019_realdata.ipynb) |
+| 6 | 대회 전략·제안서 | [`docs/`](docs/README.md) |
 
 > 처음이라면 **2번 노트북부터** 여세요. 본 과제 데이터는 양성이 1% 남짓이라 지표가 늘 바닥에
 > 붙어 있어서 배우기가 어렵습니다. 2번은 신호가 뚜렷한 데이터로 흐름만 먼저 익히는 용도입니다.
@@ -43,7 +44,8 @@ hf-risk-prediction-sw/
 ├── 📓 notebooks/                    ← 여기부터 보세요 (실행하며 배우는 곳)
 │   ├── 01_baseline_pipeline.ipynb       프로젝트 파이프라인 4단계 체험
 │   ├── 02_learning_project.ipynb        ML 표준 흐름 학습용 (권장 시작점)
-│   └── 03_challenge2019_realdata.ipynb  실제 공개 데이터로 검증
+│   ├── 03_challenge2019_realdata.ipynb  실제 공개 데이터로 검증
+│   └── 04_challenge2012_timeseries.ipynb 시계열 파이프라인 학습용 (권장 2번째)
 │
 ├── 🧠 src/                          ← 실제 코드 (아래 3개 트랙으로 나뉨)
 │   │

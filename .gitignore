@@ -51,3 +51,6 @@ Thumbs.db
 # CatBoost training artifacts
 catboost_info/
 **/catboost_info/
+
+# Notebook-generated demo cohort (Challenge-2012 format)
+models/_demo_*/

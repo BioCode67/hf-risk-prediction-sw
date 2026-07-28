@@ -58,6 +58,8 @@ train_dl.py            # (repo root) DL training entry point
 notebooks/01_baseline_pipeline.ipynb       # 4-stage walkthrough of this project's pipeline
 notebooks/02_learning_project.ipynb        # standard tabular-ML workflow on Pima (teaching)
 notebooks/03_challenge2019_realdata.ipynb  # real Challenge-2019 data walkthrough
+notebooks/04_challenge2012_timeseries.ipynb# time-series pipeline taught on Challenge-2012
+                                           #   (self-generates a demo cohort if data is absent)
 
 README.md      # Korean; structure map + command table + how to read the metrics
 src/README.md  # Korean; module map + why src/ must stay flat
