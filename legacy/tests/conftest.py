@@ -1,16 +1,17 @@
-"""Pytest configuration: expose the src package and shared fixtures."""
+"""Fixtures for the legacy static heart-failure pipeline.
+
+These all depend on the source archives in ``data/``, which are git-ignored, so
+every test using them skips automatically on a fresh clone. Import roots are set
+up by the repository-root ``conftest.py``.
+"""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = PROJECT_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(scope="session")

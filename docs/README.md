@@ -65,4 +65,6 @@
 |---|---|
 | 코드 구조·명령어·지표 설명 | [`../README.md`](../README.md) |
 | 실행하며 배우는 노트북 | [`../notebooks/`](../notebooks/) |
+| 모듈별 상세 (어떤 함수가 뭘 하나) | [`../src/README.md`](../src/README.md) |
+| 초기 버전(정적 심부전 예측) | [`../legacy/README.md`](../legacy/README.md) |
 | 개발 규칙 (Claude Code용) | [`../CLAUDE.md`](../CLAUDE.md) |

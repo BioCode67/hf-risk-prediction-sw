@@ -64,13 +64,10 @@ hf-risk-prediction-sw/
 │   ├── dataset.py              가변길이 시퀀스 배칭 (padding/masking)
 │   ├── model.py                LSTM / GRU 분류기
 │   │
-│   │  ── 정적 트랙 ── 초기 버전. 한 시점 검사값 → 심부전 위험
-│   ├── data_loader.py          데이터 로드 + OMOP CDM 변환
-│   ├── train.py                LightGBM/XGBoost 학습
-│   ├── explainability.py       SHAP
-│   └── main.py                 FastAPI 서버 (/predict, /convert-omop)
+│   └── README.md               모듈 상세 지도
 │
 ├── 🧪 tests/                        pytest — 데이터 없어도 통과 (자동 skip)
+├── 📦 legacy/                       초기 버전 (정적 심부전 예측) — 학습 시 건너뛰세요
 ├── 📄 docs/                         대회 전략·제안서·런북 → docs/README.md 참고
 ├── 📊 data/                         데이터셋 (git에 없음)
 ├── 💾 models/                       학습된 모델·그림 (git에 없음)
@@ -85,18 +82,19 @@ hf-risk-prediction-sw/
 
 ---
 
-## 두 개의 트랙
+## `src/`와 `legacy/`
 
-이 저장소에는 **목적이 다른 두 파이프라인**이 함께 있습니다.
-
-|  | ⏱ 시계열 트랙 (본체) | 📋 정적 트랙 (초기 버전) |
+|  | ⏱ `src/` — 시계열 트랙 | 📦 `legacy/` — 정적 트랙 |
 |---|---|---|
 | **입력** | 시간에 따른 활력징후 (맥박·혈압·체온·SpO₂·호흡수) | 한 시점의 검사 결과 |
 | **예측** | 앞으로 N시간 내 심정지 | 심부전 사망 위험 |
-| **파일** | `vitals_*.py` | `data_loader.py`, `train.py`, `main.py` |
-| **상태** | **대회 출품작 — 현재 개발 중** | 완성, 유지만 |
+| **상태** | **대회 출품작 — 개발 중** | 초기 버전, 보관 |
 
-아래 설명은 대부분 **시계열 트랙** 기준입니다.
+프로젝트 초기에는 정적 트랙으로 시작했다가 주제가 시계열 심정지 조기경보로 바뀌었습니다.
+정적 트랙은 **FastAPI 서버**와 **OMOP CDM 변환**을 갖고 있어 지우지 않고
+[`legacy/`](legacy/README.md)에 보관합니다.
+
+**학습하실 때는 `legacy/`를 건너뛰세요.** 아래 설명은 전부 `src/` 기준입니다.
 
 ---
 
@@ -171,7 +169,6 @@ python src/sepsis_explore.py ./training_setA --horizon=6 --tune --trials=50 --gp
 | MIMIC-IV 구조 확인 | `python src/mimic_explore.py <폴더>` |
 | MIMIC-IV 전체 실행 | `python src/mimic_explore.py <폴더> --model --gpu` |
 | 딥러닝(LSTM) 학습 | `python train_dl.py --rnn lstm --epochs 20` |
-| API 서버 (정적 트랙) | `uvicorn main:app --app-dir src --reload` |
 | 테스트 | `pytest -q` |
 
 `--gpu`와 `--tune`은 함께 쓸 수 있습니다(각 Optuna 시도가 CUDA에서 실행). 둘 다 **선택 사항**이며,
@@ -276,14 +273,11 @@ python src/sepsis_explore.py ./training_setA --horizon=6 --tune --trials=50 --gp
 
 그래서 이렇게 동작합니다:
 - `python src/vitals_train.py` → **합성 데이터로 정상 작동** ✅
-- `python src/train.py` (정적 트랙) → 데이터 필요, 없으면 `FileNotFoundError`
-- `/predict` API → `models/best_model.pkl` 없으면 503 반환
 - `pytest` → **통과** ✅ (데이터가 필요한 테스트는 자동으로 skip)
+- `legacy/`의 정적 트랙 → 데이터 필요, 없으면 `FileNotFoundError` (정상)
 
-정적 트랙까지 돌리려면 `data/`에 아래 파일을 넣으세요 (로더가 자동 압축 해제):
-
-- `Heart Failure Clinical Records Dataset.zip` → 299행, 타깃 `DEATH_EVENT`
-- `Cardiovascular Disease dataset.zip` → 70,000행, `;` 구분
+즉 **시계열 트랙은 데이터 없이 바로 실행됩니다.** 정적 트랙까지 돌리려면
+[`legacy/README.md`](legacy/README.md)를 참고하세요.
 
 ---
 
@@ -308,33 +302,9 @@ pytest -q
 | [`docs/proposal-draft.md`](docs/proposal-draft.md) | 예선 제안서 초안 (30장) |
 | [`docs/differentiation.md`](docs/differentiation.md) | 본선 발표·질의응답 대비 |
 | [`docs/server-runbook.md`](docs/server-runbook.md) | GPU 서버 환경 구축 절차 |
+| [`src/README.md`](src/README.md) | 모듈 상세 지도 |
+| [`legacy/README.md`](legacy/README.md) | 보관된 정적 트랙 |
 | [`CLAUDE.md`](CLAUDE.md) | 개발 규칙 (Claude Code / 개발자용) |
-
----
-
-## 정적 트랙 API
-
-초기 버전인 정적 트랙은 FastAPI 서버를 제공합니다.
-
-```bash
-uvicorn main:app --app-dir src --reload   # 문서: http://localhost:8000/docs
-```
-
-| 메서드 | 엔드포인트 | 설명 |
-|---|---|---|
-| `GET` | `/` | 서비스 정보 |
-| `GET` | `/health` | 상태 + 모델 로드 여부 |
-| `POST` | `/predict` | 위험 확률 + 라벨 + SHAP 상위 3개 요인 |
-| `POST` | `/convert-omop` | OMOP CDM v5.4 테이블로 변환 |
-
-```bash
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"age": 65, "anaemia": 0, "creatinine_phosphokinase": 146,
-       "diabetes": 0, "ejection_fraction": 20, "high_blood_pressure": 1,
-       "platelets": 162000, "serum_creatinine": 1.3, "serum_sodium": 129,
-       "sex": 1, "smoking": 1}'
-```
 
 ---
 

@@ -78,19 +78,6 @@ SHAP으로 전역 기여도와 개별 윈도우 근거를 뽑습니다.
 
 ---
 
-## 📋 정적 트랙 (초기 버전)
-
-한 시점의 검사값으로 심부전 위험을 예측합니다. 완성 상태이며 유지만 합니다.
-
-| 파일 | 역할 |
-|---|---|
-| `data_loader.py` | 로드·전처리·분할 + `to_omop_cdm()` |
-| `train.py` | LightGBM(Optuna) + XGBoost → `models/best_model.pkl` |
-| `explainability.py` | SHAP 리포트 |
-| `main.py` | FastAPI 서버 |
-
----
-
 ## ⚠️ 구조에 관한 중요한 제약
 
 **`src/`는 설치되는 패키지가 아니라 import 경로입니다.**
@@ -107,12 +94,16 @@ from src.vitals_data import build_windows  # ❌ 작동하지 않음
 | 진입점 | 방식 |
 |---|---|
 | 스크립트 | `python src/vitals_train.py` — 실행 파일의 폴더가 자동으로 경로에 포함 |
-| API | `uvicorn main:app --app-dir src` |
-| 테스트 | `tests/conftest.py`가 `sys.path`에 `src/` 추가 |
+| 테스트 | 저장소 루트 `conftest.py`가 `sys.path`에 `src/` 추가 |
 | CI | `sys.path.insert(0, 'src')` |
 | 노트북 | `sys.path.insert(0, str(REPO / "src"))` |
 
-그래서 **파일을 하위 폴더로 옮기면 위 다섯 곳이 전부 깨집니다.** 폴더로 나누는 대신
+그래서 **파일을 하위 폴더로 옮기면 위 네 곳이 전부 깨집니다.** 폴더로 나누는 대신
 파일명 접두사(`vitals_*`, `*_explore`)로 트랙을 구분하고 있습니다.
 
-바꿔야 한다면 다섯 진입점을 모두 함께 수정하고 `pytest -q`로 검증하세요.
+바꿔야 한다면 네 진입점을 모두 함께 수정하고 `pytest -q`로 검증하세요.
+(본선 안심존이 오프라인 폐쇄망이라 `pip install -e .` 같은 설치 단계를 요구하지 않는 편이
+안전합니다 — 이것도 평평한 구조를 유지하는 이유입니다.)
+
+> 초기 버전인 정적 심부전 예측 트랙은 [`../legacy/`](../legacy/README.md)로 옮겼습니다.
+> 같은 이유로 그쪽도 별도의 import 경로입니다.
