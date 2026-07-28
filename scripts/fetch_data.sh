@@ -85,7 +85,12 @@ fetch_files() {
         return 0
     fi
 
-    split -n "l/$JOBS" -d "$tmp/missing.txt" "$tmp/chunk_"
+    # Deal the list round-robin into JOBS files. `split -n l/N -d` would do this
+    # too, but both flags are GNU-only and this script has to run on a macOS
+    # laptop as well.
+    awk -v jobs="$JOBS" -v prefix="$tmp/chunk_" \
+        '{ printf "%s\n", $0 > sprintf("%s%02d", prefix, NR % jobs) }' "$tmp/missing.txt"
+
     for chunk in "$tmp"/chunk_*; do
         [ -s "$chunk" ] || continue
         wget -q -nc -T 30 -t 3 -P "$dest" -B "$url" -i "$chunk" &
