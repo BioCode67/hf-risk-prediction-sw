@@ -34,7 +34,7 @@ jobs:
         # torch-dependent modules (utils, dataset, model, train_dl) are excluded:
         # torch lives in requirements-torch.txt and is not installed in CI.
         run: |
-          python -c "import sys; sys.path.insert(0, 'src'); import vitals_data, vitals_train, vitals_explain, vitals_report, vitals_phenotype, omop_explore, mimic_explore, sepsis_explore, mortality_explore; print('src modules import OK')"
+          python -c "import sys; sys.path.insert(0, 'src'); import vitals_data, vitals_train, vitals_explain, vitals_narrate, vitals_api, vitals_report, vitals_phenotype, omop_explore, mimic_explore, sepsis_explore, mortality_explore; print('src modules import OK')"
           python -c "import sys; sys.path.insert(0, 'legacy'); import data_loader, train, explainability, main; print('legacy modules import OK')"
 
       - name: Run tests

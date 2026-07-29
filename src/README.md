@@ -42,6 +42,21 @@
 
 SHAP으로 전역 기여도와 개별 윈도우 근거를 뽑습니다.
 
+### `vitals_narrate.py` — 경보를 문장으로
+
+SHAP 숫자를 병동에서 읽을 한국어 문장으로 옮깁니다. 두 단계로 분리돼 있습니다.
+
+| 함수 | 성격 |
+|---|---|
+| `build_evidence()` | 결정론적. SHAP 상위 요인 + 현재값 + 개인 기저선 + NEWS를 dict로 |
+| `format_evidence()` | 그 dict를 텍스트 블록으로. LLM 없이도 이것만으로 설명이 됩니다 |
+| `narrate()` | Groq API로 문장 생성. LLM은 판단하지 않고 표현만 담당합니다 |
+
+`narrate()`만 외부 API를 씁니다. 폐쇄망(안심존)에서는 앞의 두 개만 쓰세요.
+MIMIC·경북대 데이터는 DUA상 외부 전송이 금지라 `source="mimic"`/`"khth"` 이면
+`narrate()`가 `PermissionError`를 냅니다. 키는 `.env`의 `GROQ_API_KEY`에서
+읽으며 `.env`는 git에 올라가지 않습니다. 의존성은 `requirements-llm.txt`.
+
 ### `vitals_report.py` — 그림
 
 `render_report()` 하나로 PR곡선·알람부담·악화궤적·lead-time 그림을 전부 생성합니다.

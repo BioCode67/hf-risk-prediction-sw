@@ -1,0 +1,32 @@
+# Render blueprint for the dashboard API (src/vitals_api.py).
+#
+# The service loads models/dashboard_challenge2019.pkl and serves it — it never
+# reads the raw Challenge-2019 files, which are not in the repo and would take
+# ~5 minutes and 4 GB to process. Build the artifact locally first (see
+# docs/deploy.md) and commit it, or the service starts with the synthetic cohort.
+#
+# The frontend is NOT here: web/ deploys to Vercel, with EWS_API_ORIGIN pointed
+# at this service's URL.
+
+services:
+  - type: web
+    name: ews-api
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn vitals_api:app --app-dir src --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: EWS_ARTIFACT
+        value: models/dashboard_challenge2019.pkl
+      # Browser requests are proxied by Next server-side, so no browser origin
+      # reaches this service. Set explicitly only if you bypass that proxy.
+      - key: EWS_CORS_ORIGINS
+        value: ""
+      # Set in the Render dashboard, never in this file. Without it the
+      # natural-language button is disabled and everything else still works.
+      - key: GROQ_API_KEY
+        sync: false

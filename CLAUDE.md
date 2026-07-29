@@ -42,6 +42,9 @@ src/vitals_data.py     # synthetic + KHTH + MIMIC adapters, sanitation, windows,
                        #   + static(age/sex) features, patient-level split, lead-time
 src/vitals_train.py    # cost-sensitive XGBoost vs NEWS; AUPRC/sens@spec/alarm-burden/lead-time
 src/vitals_explain.py  # SHAP drivers (global + per-window)
+src/vitals_narrate.py  # alarm -> Korean prose: build_evidence (deterministic, offline)
+                       #   + narrate (Groq LLM; refuses mimic/khth sources — DUA)
+src/vitals_api.py      # FastAPI behind web/: /api/overview|patients|patients/{id}[/explain]
 src/vitals_report.py   # figures: PR-curve, trajectory, lead-time, alarm-burden (render_report)
 src/vitals_phenotype.py# unsupervised cardiac-arrest phenotype clustering + heatmap
 src/mimic_explore.py   # real MIMIC-IV: explore + --scan-arrest/--arrest-counts/--model
@@ -62,7 +65,16 @@ notebooks/04_challenge2012_timeseries.ipynb# time-series pipeline taught on Chal
                                            #   (self-generates a demo cohort if data is absent)
 notebooks/05_challenge2019_sepsis.ipynb    # verifies the false-alarm claim on Challenge-2019:
                                            #   alarm burden at matched 50/70/90% sensitivity,
-                                           #   why the 90% comparison is degenerate, seed repeats
+                                           #   why the 90% comparison is degenerate, seed repeats,
+                                           #   natural-language alarm explanations (§11)
+
+# dashboard (Next.js 15 + Tailwind v4 + Recharts; KMEDIhub intern track, not 안심존)
+web/src/app/page.tsx          # renders <Dashboard/>
+web/src/components/           # Dashboard, PatientList, RiskTimeline, VitalsGrid,
+                              #   EvidenceCard, AlarmBurden, RiskBadge, ui/ (shadcn-compatible)
+web/src/hooks/useDashboard.ts # all server state, one reducer
+web/src/lib/types.ts          # 1:1 with vitals_api's pydantic models — the contract
+web/README.md                 # Korean; why web/ not src/, how to run both halves
 
 README.md      # Korean; structure map + command table + how to read the metrics
 src/README.md  # Korean; module map + why src/ must stay flat
@@ -72,7 +84,7 @@ docs/proposal-draft.md        # 예선 제안서 30장 골격 초안
 docs/differentiation.md       # 본선 발표·Q&A 대비
 docs/STATUS.md                # 현재 진행 상황
 docs/server-runbook.md        # GPU 서버 구축·실행 (conda, VS Code, 함정 모음)
-tests/  # test_vitals/_mimic/_omop/_report/_sepsis/_mortality/_torch (active, time-series)
+tests/  # test_vitals/_mimic/_omop/_report/_sepsis/_mortality/_narrate/_torch (active, time-series)
 conftest.py  # repo root: puts BOTH src/ and legacy/ on sys.path for pytest
 scripts/fetch_data.sh  # download the open PhysioNet sets (challenge2012 | challenge2019 | all)
 
@@ -107,6 +119,7 @@ pip install -r requirements.txt
 # active track — no data required (synthetic cohort built in)
 python src/vitals_train.py      # XGBoost vs NEWS + false-alarm metrics
 python src/vitals_explain.py    # SHAP drivers
+python src/vitals_narrate.py    # alarm -> evidence dict + Korean sentence (LLM half optional)
 python src/vitals_report.py     # figures -> models/
 python src/vitals_phenotype.py  # arrest phenotype clustering
 
@@ -114,7 +127,15 @@ python src/sepsis_explore.py <dir> --horizon=6    # real Challenge-2019 data (se
 python src/mortality_explore.py <dir> --horizon=6 # real Challenge-2012 data (ICU mortality)
 python src/mimic_explore.py <dir> --model --gpu  # real MIMIC-IV
 
-pytest -q                       # test suite (55 pass, 11 skip on a fresh clone)
+pytest -q                       # test suite (80 pass, 11 skip on a fresh clone)
+
+# dashboard — two processes
+uvicorn vitals_api:app --app-dir src --reload           # API on :8000 (synthetic)
+EWS_DATA_DIR=data/challenge2019/training_setA \
+  uvicorn vitals_api:app --app-dir src --reload         # API on real Challenge-2019
+cd web && npm install && npm run dev                    # UI on :3000
+# the browser only ever hits :3000 — next.config.mjs rewrites /api/* (and /docs)
+# to the FastAPI origin server-side, so one forwarded port and no CORS.
 
 # archived static track (needs data/)
 python legacy/train.py
@@ -131,6 +152,19 @@ uvicorn main:app --app-dir legacy --reload   # serve API; docs at /docs
   prefer not to require `pip install -e .`, since the 본선 안심존 is offline.
 - `legacy/` is archived, not active. The competition entry is the
   time-series track in `src/`. Keep new work out of `legacy/`.
+- `web/` is a Next.js app and `src/` is the Python import root; the dashboard
+  therefore lives at `web/src/app|components|lib`, never under the repo's `src/`.
+  `web/src/lib/types.ts` mirrors `vitals_api`'s pydantic models one-for-one —
+  change both together. `vitals_api` trains on the train split and serves only
+  test patients, so nothing on screen is a score its own patient was fitted on.
+- `vitals_narrate.narrate()` calls a hosted LLM and therefore belongs to the
+  KMEDIhub intern track, not the competition entry: the 안심존 is offline, so
+  only the deterministic `build_evidence`/`format_evidence` half runs there.
+  Its one dependency (`requests`) lives in `requirements-llm.txt`, outside
+  `requirements.txt` and CI. `GROQ_API_KEY` comes from the environment or a
+  git-ignored `.env` — never commit a key. MIMIC-IV and KHTH are credentialed
+  under a DUA that forbids third-party sharing, so `narrate` raises
+  `PermissionError` for those `source=` values; keep that guard.
 - Model artifact name is `models/best_model.pkl` — used consistently by
   `legacy/train.py`, `legacy/explainability.py`, and `legacy/main.py`. Keep them
   in sync if renamed. The time-series track writes `models/vitals_ews_model.pkl`.
