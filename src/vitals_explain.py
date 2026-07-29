@@ -9,6 +9,7 @@ trees and needs no internet — suitable for the offline 안심존.
 from __future__ import annotations
 
 import pickle
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -16,11 +17,28 @@ import numpy as np
 import pandas as pd
 import shap
 
+# Building a TreeExplainer walks the whole forest, which costs far more than the
+# per-row explanation itself — a serving path that explains one window at a time
+# would otherwise pay that on every request. Keyed weakly so a discarded model
+# does not pin its explainer in memory.
+_EXPLAINERS: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+
+
+def _explainer(model: Any) -> Any:
+    """Return a cached TreeExplainer for ``model``, building it once."""
+    try:
+        cached = _EXPLAINERS.get(model)
+    except TypeError:  # model is not weak-referenceable
+        return shap.TreeExplainer(model)
+    if cached is None:
+        cached = shap.TreeExplainer(model)
+        _EXPLAINERS[model] = cached
+    return cached
+
 
 def _shap_values(model: Any, X: pd.DataFrame | np.ndarray) -> np.ndarray:
     """Return a 2-D SHAP value matrix for the positive class."""
-    explainer = shap.TreeExplainer(model)
-    values = explainer.shap_values(X)
+    values = _explainer(model).shap_values(X)
     if isinstance(values, list):  # some versions return [neg, pos]
         values = values[1]
     return np.asarray(values)

@@ -1,0 +1,8 @@
+# Natural-language alarm explanations via an external LLM API (src/vitals_narrate.py).
+# Optional: build_evidence()/format_evidence() work without any of this, and the
+# offline 안심존 cannot use a hosted API at all — hence a separate file, kept out
+# of requirements.txt and CI.
+#
+#   pip install -r requirements.txt -r requirements-llm.txt
+#   echo 'GROQ_API_KEY=...' > .env        # .env is git-ignored
+requests>=2.31.0
