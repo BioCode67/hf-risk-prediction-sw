@@ -8,6 +8,23 @@
 >
 > 2026 K-Health 미개방 의료데이터 활용 경진대회 출품작 (경북대학교병원 활력징후 데이터)
 
+## ▶ 데모 — [web-ebon-rho-81.vercel.app](https://web-ebon-rho-81.vercel.app)
+
+같은 파이프라인을 **공개 실데이터(PhysioNet/CinC Challenge 2019, 패혈증)** 로 끝까지 돌린
+결과입니다. 설치할 것 없이 바로 열립니다.
+
+| 볼 수 있는 것 | 어디서 |
+|---|---|
+| 환자 400명 — 전부 모델이 학습에 쓰지 않은 test 환자 | 왼쪽 병동 목록 |
+| 실제 발병 여부·시각 (정답 라벨) | 목록의 `실제 결과` 열, `발병` 필터로 88명만 보기 |
+| 경보 근거 — SHAP 상위 3개 + 자연어 설명 | 오른쪽 예측 카드 |
+| **경보 임계값을 직접 움직여 보기** | 하단 슬라이더 — 검출률↔알람 트레이드오프가 실시간으로 |
+| 모델 vs NEWS 경보 구간 비교 | 경보 추이 그래프의 붉은 음영 |
+| 코호트 EDA 5종 | 하단 `코호트 탐색` 펼치기 |
+
+> 심정지가 아니라 **패혈증**이며, 대회 데이터가 아닌 공개 데이터입니다.
+> 결과·한계·배포 구조는 [`docs/sepsis-dashboard.md`](docs/sepsis-dashboard.md)에 정리했습니다.
+
 ---
 
 ## 한 문단 요약
@@ -361,6 +378,9 @@ pytest -q
 |---|---|
 | [`docs/README.md`](docs/README.md) | 문서 전체 지도 (여기부터) |
 | [`docs/STATUS.md`](docs/STATUS.md) | 현재 진행 상황 요약 |
+| [`docs/sepsis-dashboard.md`](docs/sepsis-dashboard.md) | **배포된 데모의 결과·한계·배포 구조** |
+| [`docs/deploy.md`](docs/deploy.md) | 대시보드 배포 절차 (아티팩트 → Vercel) |
+| [`web/README.md`](web/README.md) | 대시보드 구조·실행 |
 | [`docs/competition-strategy.md`](docs/competition-strategy.md) | 대회 전략 및 심사 기준 정렬 |
 | [`docs/proposal-draft.md`](docs/proposal-draft.md) | 예선 제안서 초안 (30장) |
 | [`docs/differentiation.md`](docs/differentiation.md) | 본선 발표·질의응답 대비 |
