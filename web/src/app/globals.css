@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+/* Theme is driven by one source of truth: data-theme on <html>, stamped before
+   paint by the inline script in layout.tsx. Dark values live under that
+   attribute alone, so there is never a second place to keep in sync.
+
+   Token *names* follow the shadcn/v0 convention (background, card, primary,
+   muted-foreground, …) so generated components drop in unchanged. The *values*
+   are the project's validated palette — the categorical pair and the four
+   status steps were run through the contrast/CVD checks in both modes. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light;
+
+  --background: #f9f9f7;
+  --foreground: #0b0b0b;
+  --card: #fcfcfb;
+  --card-foreground: #0b0b0b;
+  --muted: #f0efec;
+  --muted-foreground: #52514e;
+  --subtle-foreground: #898781;
+  --border: #e1e0d9;
+  --input: #e1e0d9;
+
+  --primary: #2a78d6;
+  --primary-foreground: #ffffff;
+
+  /* Chart chrome */
+  --gridline: #e1e0d9;
+  --axis: #c3c2b7;
+
+  /* Categorical slots. Slot 1 is always the model, slot 2 is always NEWS. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+
+  /* Diverging pair for SHAP polarity: raises risk ↔ lowers risk. */
+  --diverge-raise: #e34948;
+  --diverge-lower: #2a78d6;
+
+  /* Status palette (fixed, never themed) — always paired with an icon + label. */
+  --success: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  --radius: 0.75rem;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0d0d0d;
+  --foreground: #ffffff;
+  --card: #1a1a19;
+  --card-foreground: #ffffff;
+  --muted: #232322;
+  --muted-foreground: #c3c2b7;
+  --subtle-foreground: #898781;
+  --border: #2c2c2a;
+  --input: #2c2c2a;
+
+  --primary: #3987e5;
+  --primary-foreground: #0d0d0d;
+
+  --gridline: #2c2c2a;
+  --axis: #383835;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+
+  --diverge-raise: #e66767;
+  --diverge-lower: #3987e5;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-serious: var(--serious);
+  --color-critical: var(--critical);
+
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 0.25rem);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo",
+    "Noto Sans KR", sans-serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Recharts draws its own chrome; pin it to the palette rather than its defaults. */
+.recharts-cartesian-grid line {
+  stroke: var(--gridline);
+}
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: var(--axis);
+}
+.recharts-text {
+  fill: var(--subtle-foreground);
+  font-size: 11px;
+}
+
+/* Refetches hold the previous render at reduced opacity — never a skeleton flash. */
+.is-stale {
+  opacity: 0.55;
+  transition: opacity 120ms ease-out;
+}
