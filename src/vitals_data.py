@@ -140,6 +140,9 @@ class WindowedDataset:
     # Hours from each window's end to the arrest (NaN for control windows);
     # used for lead-time analysis. Optional for backward compatibility.
     time_to_arrest: pd.Series | None = None
+    # Hour at which each window ends, on the patient's own clock. Lets a caller
+    # place a window back on the trajectory (risk timelines, per-hour lookups).
+    window_end_hour: pd.Series | None = None
 
 
 @dataclass
@@ -817,6 +820,7 @@ def build_windows(
     labels: list[int] = []
     groups: list[int] = []
     times_to_arrest: list[float] = []
+    end_hours: list[float] = []
 
     vital_columns = list(VITALS)
     for patient_id, group in cohort.vitals.groupby("patient_id"):
@@ -853,6 +857,7 @@ def build_windows(
             labels.append(label)
             groups.append(patient_id)
             times_to_arrest.append(float(arrest_hour - end) if has_arrest else float("nan"))
+            end_hours.append(float(end))
 
     features = pd.DataFrame(rows, columns=names)
     return WindowedDataset(
@@ -861,6 +866,7 @@ def build_windows(
         groups=pd.Series(groups, name="patient_id"),
         feature_names=names,
         time_to_arrest=pd.Series(times_to_arrest, name="time_to_arrest"),
+        window_end_hour=pd.Series(end_hours, name="window_end_hour"),
     )
 
 
@@ -900,6 +906,7 @@ def add_personalized_features(
         groups=windowed.groups,
         feature_names=windowed.feature_names + new_names,
         time_to_arrest=windowed.time_to_arrest,
+        window_end_hour=windowed.window_end_hour,
     )
 
 
@@ -928,6 +935,7 @@ def add_static_features(windowed: WindowedDataset, cohort: VitalSignsCohort) -> 
         groups=windowed.groups,
         feature_names=windowed.feature_names + new_names,
         time_to_arrest=windowed.time_to_arrest,
+        window_end_hour=windowed.window_end_hour,
     )
 
 

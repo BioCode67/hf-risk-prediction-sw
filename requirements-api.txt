@@ -1,0 +1,18 @@
+# Runtime dependencies for the dashboard API only (src/vitals_api.py).
+#
+# Deliberately smaller than requirements.txt: the deployed service loads a
+# prebuilt artifact and scores windows, so it never needs the training-side
+# extras (lightgbm, catboost, optuna) or the figure stack (matplotlib).
+# optuna is imported lazily inside vitals_train's tuning path, which the API
+# does not call.
+#
+#   pip install -r requirements-api.txt
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+shap>=0.44.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+requests>=2.31.0
