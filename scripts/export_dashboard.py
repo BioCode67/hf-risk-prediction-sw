@@ -95,6 +95,8 @@ def export(artifact: Path, out_dir: Path) -> None:
         },
         "browsable": len(patient_ids),
         "burden": svc.burden,
+        "normal_band": svc.normal_band,
+        "eda": svc.eda,
         # Shared once instead of repeated in every hour's payload.
         "vitals": [
             {"vital": vital, "label": VITAL_KO[vital][0], "unit": VITAL_KO[vital][1]}

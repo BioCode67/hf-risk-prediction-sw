@@ -4,15 +4,18 @@ import { Activity, AlertCircle, Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AlarmNews } from "@/components/alarm-news";
+import { CohortEda } from "@/components/cohort-eda";
 import { ModelScopeWarning } from "@/components/model-scope-warning";
 import { PatientHeader } from "@/components/patient-header";
 import { PatientList } from "@/components/patient-list";
 import { SepsisPrediction } from "@/components/sepsis-prediction";
+import { ThresholdControl } from "@/components/threshold-control";
 import { VitalsChart } from "@/components/vitals-chart";
 import { VitalsKpiCards } from "@/components/vitals-kpi-cards";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDashboard } from "@/hooks/useDashboard";
+import { decide, reevaluate } from "@/lib/decision";
 
 /**
  * Ward list on the left, one patient's story on the right.
@@ -34,12 +37,27 @@ export default function Page() {
     selectedHour,
     status,
     errors,
+    threshold,
     selectPatient,
     selectHour,
+    setThreshold,
     explain,
   } = useDashboard(400);
 
-  const evidence = detail?.evidence ?? null;
+  // The baked decisions are only valid at the exported threshold. Once the
+  // slider exists they must be recomputed, or the badges and the alarm bands
+  // would disagree with the control the user just moved.
+  const cut = threshold ?? overview?.threshold ?? detail?.threshold ?? 0.5;
+  const evidence = detail ? reevaluate(detail.evidence, cut) : null;
+  const rows = patients.map((patient) => {
+    const derived = decide(patient.risk, patient.news_score, cut, overview?.news_threshold ?? 5);
+    return {
+      ...patient,
+      risk_level: derived.level,
+      model_alarm: derived.modelAlarm,
+      news_alarm: derived.newsAlarm,
+    };
+  });
   const stale = status.detail === "loading";
 
   return (
@@ -62,7 +80,7 @@ export default function Page() {
             </CardHeader>
             <div className="flex min-h-0 flex-1 flex-col xl:h-[calc(100svh-11rem)]">
               <PatientList
-                patients={patients}
+                patients={rows}
                 selectedId={selectedPatientId}
                 onSelect={selectPatient}
                 stale={status.patients === "loading"}
@@ -73,7 +91,10 @@ export default function Page() {
           <div className="flex min-w-0 flex-col gap-4 md:gap-5">
             {errors.detail && <ErrorNote message={errors.detail} />}
 
-            <PatientHeader detail={detail} summary={patients.find((p) => p.patient_id === selectedPatientId) ?? null} />
+            <PatientHeader
+              detail={detail && evidence ? { ...detail, evidence, threshold: cut } : null}
+              summary={rows.find((p) => p.patient_id === selectedPatientId) ?? null}
+            />
 
             {detail && evidence ? (
               <div className={`flex flex-col gap-4 md:gap-5 ${stale ? "is-stale" : ""}`}>
@@ -87,7 +108,8 @@ export default function Page() {
                       trajectory={detail.trajectory}
                       vitals={evidence.vitals}
                       timeline={detail.timeline}
-                      threshold={detail.threshold}
+                      threshold={cut}
+                      normalBand={overview?.normal_band ?? {}}
                       selectedHour={evidence.hour}
                       eventHour={detail.arrest_hour}
                     />
@@ -105,11 +127,30 @@ export default function Page() {
                 </div>
 
                 <AlarmNews
-                  detail={detail}
+                  detail={{ ...detail, evidence, threshold: cut }}
                   burden={overview?.burden ?? []}
                   selectedHour={selectedHour}
                   onSelectHour={selectHour}
                 />
+
+                {overview && (
+                  <ThresholdControl
+                    eda={overview.eda}
+                    threshold={cut}
+                    defaultThreshold={overview.threshold}
+                    onChange={setThreshold}
+                  />
+                )}
+
+                {overview && (
+                  <CohortEda
+                    eda={overview.eda}
+                    normalBand={overview.normal_band}
+                    vitalLabels={Object.fromEntries(
+                      evidence.vitals.map((vital) => [vital.vital, { label: vital.label, unit: vital.unit }]),
+                    )}
+                  />
+                )}
               </div>
             ) : (
               <Card className="text-subtle-foreground flex h-64 items-center justify-center text-sm">

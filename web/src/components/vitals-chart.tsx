@@ -13,7 +13,7 @@ import {
 
 import { alarmRanges } from "@/lib/alarms";
 import { SERIES } from "@/lib/risk";
-import type { TimelinePoint, TrajectoryPoint, VitalPoint } from "@/lib/types";
+import type { NormalBand, TimelinePoint, TrajectoryPoint, VitalPoint } from "@/lib/types";
 
 /**
  * Vital-sign trends as small multiples — one plot per vital, each on its own
@@ -35,6 +35,7 @@ export function VitalsChart({
   vitals,
   timeline,
   threshold,
+  normalBand,
   selectedHour,
   eventHour,
 }: {
@@ -42,6 +43,7 @@ export function VitalsChart({
   vitals: VitalPoint[];
   timeline: TimelinePoint[];
   threshold: number;
+  normalBand: Record<string, NormalBand>;
   selectedHour: number | null;
   eventHour: number | null;
 }) {
@@ -73,6 +75,14 @@ export function VitalsChart({
             <span aria-hidden className="h-3 w-0.5" style={{ background: "var(--primary)" }} />
             보고 있는 시점 {selectedHour != null && `${selectedHour}h`}
           </li>
+          <li className="flex items-center gap-1.5">
+            <span
+              aria-hidden
+              className="h-3 w-4 rounded-[2px]"
+              style={{ background: "color-mix(in oklab, var(--success) 16%, transparent)" }}
+            />
+            정상 환자 범위 (대조군 25~75%)
+          </li>
         </ul>
       </div>
 
@@ -83,6 +93,7 @@ export function VitalsChart({
             vital={vital}
             trajectory={trajectory}
             ranges={ranges}
+            band={normalBand[vital.vital] ?? null}
             selectedHour={selectedHour}
             eventHour={eventHour}
           />
@@ -96,12 +107,14 @@ function VitalPlot({
   vital,
   trajectory,
   ranges,
+  band,
   selectedHour,
   eventHour,
 }: {
   vital: VitalPoint;
   trajectory: TrajectoryPoint[];
   ranges: { from: number; to: number }[];
+  band: NormalBand | null;
   selectedHour: number | null;
   eventHour: number | null;
 }) {
@@ -135,7 +148,15 @@ function VitalPlot({
               minTickGap={24}
               height={18}
             />
-            <YAxis width={32} domain={["dataMin - 2", "dataMax + 2"]} tickLine={false} axisLine={false} />
+            <YAxis
+              width={32}
+              domain={[
+                (min: number) => Math.floor(Math.min(min, band?.p25 ?? min) - 2),
+                (max: number) => Math.ceil(Math.max(max, band?.p75 ?? max) + 2),
+              ]}
+              tickLine={false}
+              axisLine={false}
+            />
             <Tooltip
               cursor={{ stroke: "var(--axis)", strokeWidth: 1 }}
               content={({ active, payload, label }) =>
@@ -149,6 +170,18 @@ function VitalPlot({
                 ) : null
               }
             />
+
+            {/* Control-patient interquartile range: the shape a normal trace has.
+                Drawn first so the patient's own line reads on top of it. */}
+            {band && (
+              <ReferenceArea
+                y1={band.p25}
+                y2={band.p75}
+                fill="var(--success)"
+                fillOpacity={0.13}
+                strokeOpacity={0}
+              />
+            )}
 
             {ranges.map((range) => (
               <ReferenceArea
@@ -185,7 +218,8 @@ function VitalPlot({
       </div>
 
       <p className="text-subtle-foreground text-[11px] tabular-nums">
-        {vital.baseline == null ? "기저선 없음" : `기저선 ${vital.baseline.toFixed(1)} ${vital.unit}`}
+        {vital.baseline == null ? "기저선 없음" : `기저선 ${vital.baseline.toFixed(1)}`}
+        {band && ` · 정상 ${band.p25}~${band.p75}`}
       </p>
     </figure>
   );

@@ -50,6 +50,8 @@ interface IndexFile {
   cohort: { patients: number; windows: number; positive_rate: number; alarming: number };
   browsable: number;
   burden: Overview["burden"];
+  normal_band: Overview["normal_band"];
+  eda: Overview["eda"];
   patients: PatientSummary[];
 }
 
@@ -96,6 +98,8 @@ export const api = {
       alarming: index.cohort.alarming,
       browsable: index.browsable,
       burden: index.burden,
+      normal_band: index.normal_band,
+      eda: index.eda,
       // Resolved by the route handler, which alone knows whether a key is set.
       llm_available: await hasLlm(signal),
     };

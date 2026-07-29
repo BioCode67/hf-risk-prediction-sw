@@ -33,6 +33,8 @@ export interface DashboardState {
   selectedPatientId: string | null;
   /** null = the patient's latest window; a number pins one point on the timeline. */
   selectedHour: number | null;
+  /** Operating point. null until the snapshot's default arrives. */
+  threshold: number | null;
 
   status: Record<"overview" | "patients" | "detail" | "narration", LoadStatus>;
   errors: Partial<Record<"overview" | "patients" | "detail" | "narration", string>>;
@@ -46,7 +48,8 @@ type Action =
   | { type: "narration/ok"; data: Narration }
   | { type: "fail"; resource: keyof DashboardState["status"]; message: string }
   | { type: "selectPatient"; patientId: string }
-  | { type: "selectHour"; hour: number | null };
+  | { type: "selectHour"; hour: number | null }
+  | { type: "setThreshold"; threshold: number };
 
 const initialState: DashboardState = {
   overview: null,
@@ -55,6 +58,7 @@ const initialState: DashboardState = {
   narration: null,
   selectedPatientId: null,
   selectedHour: null,
+  threshold: null,
   status: { overview: "idle", patients: "idle", detail: "idle", narration: "idle" },
   errors: {},
 };
@@ -70,7 +74,16 @@ function reducer(state: DashboardState, action: Action): DashboardState {
       };
 
     case "overview/ok":
-      return { ...state, overview: action.data, status: { ...state.status, overview: "ready" } };
+      return {
+        ...state,
+        overview: action.data,
+        // Adopt the exported operating point once, then leave it to the user.
+        threshold: state.threshold ?? action.data.threshold,
+        status: { ...state.status, overview: "ready" },
+      };
+
+    case "setThreshold":
+      return { ...state, threshold: action.threshold };
 
     case "patients/ok":
       return {
@@ -171,6 +184,10 @@ export function useDashboard(patientLimit = 40) {
     [],
   );
   const selectHour = useCallback((hour: number | null) => dispatch({ type: "selectHour", hour }), []);
+  const setThreshold = useCallback(
+    (threshold: number) => dispatch({ type: "setThreshold", threshold }),
+    [],
+  );
 
   /** Explicit, never automatic: the LLM call costs a request, so a click triggers it. */
   const evidence = state.detail?.evidence ?? null;
@@ -190,5 +207,5 @@ export function useDashboard(patientLimit = 40) {
     [state.patients, selectedPatientId],
   );
 
-  return { ...state, selectedPatient, selectPatient, selectHour, explain };
+  return { ...state, selectedPatient, selectPatient, selectHour, setThreshold, explain };
 }

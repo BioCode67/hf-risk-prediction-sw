@@ -41,7 +41,7 @@ from vitals_data import (
     generate_synthetic_cohort,
     patient_level_split,
 )
-from vitals_narrate import VITAL_KO, build_evidence, format_evidence, narrate
+from vitals_narrate import VITAL_KO, build_evidence, describe_feature, format_evidence, narrate
 from vitals_train import alarm_burden, compute_news_scores, threshold_at_specificity, train_xgboost
 
 RiskLevel = Literal["good", "warning", "serious", "critical"]
@@ -205,6 +205,11 @@ class Service:
     cohort_positive_rate: float = 0.0
     cohort_alarming: int = 0
     burden: list[dict[str, float]] = field(default_factory=list)
+    #: Per-vital percentiles over control patients — the "what normal looks like"
+    #: band a single patient's trace is read against.
+    normal_band: dict[str, dict[str, float]] = field(default_factory=dict)
+    #: Cohort-level exploratory summaries, all aggregates (see build_eda).
+    eda: dict[str, Any] = field(default_factory=dict)
 
     def rows_for(self, patient_id: str) -> np.ndarray:
         """Positional indices of one patient's windows, in time order."""
@@ -272,6 +277,17 @@ def build_service() -> Service:
             }
         )
 
+    normal_band, eda = build_eda(
+        split.X_test,
+        split.y_test,
+        risk,
+        split.groups_test,
+        windowed.window_end_hour[mask].to_numpy(),
+        windowed.time_to_arrest[mask].to_numpy(),
+        model,
+        threshold,
+    )
+
     service = Service(
         source=source,
         model=model,
@@ -287,9 +303,163 @@ def build_service() -> Service:
         cohort_positive_rate=round(float(split.y_test.mean()), 4),
         cohort_alarming=int(np.sum(risk >= threshold)),
         burden=burden,
+        normal_band=normal_band,
+        eda=eda,
     )
     _trim_to_top_patients(service, cohort, max_patients)
     return service
+
+
+def build_eda(
+    features: pd.DataFrame,
+    labels: np.ndarray,
+    risk: np.ndarray,
+    patient_ids: np.ndarray,
+    hours: np.ndarray,
+    time_to_arrest: np.ndarray,
+    model: Any,
+    threshold: float,
+) -> tuple[dict[str, dict[str, float]], dict[str, Any]]:
+    """Cohort-level summaries for the dashboard's exploratory panel.
+
+    Everything returned is an aggregate over the held-out set — counts,
+    percentiles, means — so it stays small enough to ship as JSON and reveals
+    nothing about an individual beyond what the per-patient files already do.
+
+    Returns ``(normal_band, eda)``.
+    """
+    is_case = np.isfinite(time_to_arrest)
+
+    # What "normal" looks like: percentiles over patients who never developed
+    # sepsis. A single trace is legible mainly against this band.
+    normal_band: dict[str, dict[str, float]] = {}
+    for vital in VITALS:
+        column = features[f"{vital}_last"][~is_case].dropna()
+        if column.empty:
+            continue
+        p10, p25, p50, p75, p90 = np.percentile(column, [10, 25, 50, 75, 90])
+        normal_band[vital] = {
+            "p10": round(float(p10), 1),
+            "p25": round(float(p25), 1),
+            "p50": round(float(p50), 1),
+            "p75": round(float(p75), 1),
+            "p90": round(float(p90), 1),
+        }
+
+    # Does the signal exist at all? Align every case patient at their onset hour
+    # and average the last 24 hours before it, against the control median. If
+    # the curves are flat and identical, nothing downstream can work.
+    onset_aligned: list[dict[str, Any]] = []
+    for offset in range(-24, 1):
+        row: dict[str, Any] = {"hours_before": offset}
+        window = is_case & (np.round(time_to_arrest) == -offset)
+        if window.sum() >= 5:
+            for vital in VITALS:
+                values = features[f"{vital}_last"][window].dropna()
+                if len(values):
+                    row[vital] = round(float(values.mean()), 1)
+            row["n"] = int(window.sum())
+            onset_aligned.append(row)
+
+    # How separable are the two classes under the model? A histogram says more
+    # than AUPRC alone about where the threshold can sit.
+    edges = np.linspace(0.0, 1.0, 21)
+    positives, negatives = risk[labels == 1], risk[labels == 0]
+    risk_histogram = [
+        {
+            "from": round(float(edges[i]), 2),
+            "to": round(float(edges[i + 1]), 2),
+            # Share within each class: the classes differ ~80x in size, so raw
+            # counts would render the positive class as a flat line at zero.
+            "positive": round(float(np.mean((positives >= edges[i]) & (positives < edges[i + 1]))), 4),
+            "negative": round(float(np.mean((negatives >= edges[i]) & (negatives < edges[i + 1]))), 4),
+        }
+        for i in range(len(edges) - 1)
+    ]
+
+    # Missingness drives everything downstream — a vital that is absent half the
+    # time cannot carry a trend feature.
+    missingness = [
+        {
+            "vital": vital,
+            "label": VITAL_KO[vital][0],
+            "missing": round(float(features[f"{vital}_last"].isna().mean()), 4),
+        }
+        for vital in VITALS
+    ]
+
+    # How much warning does an alarm actually buy? First crossing per case patient.
+    leads: list[float] = []
+    for patient_id in np.unique(patient_ids[is_case]):
+        rows = np.flatnonzero((patient_ids == patient_id) & (risk >= threshold))
+        if len(rows):
+            first = rows[np.argmin(hours[rows])]
+            if np.isfinite(time_to_arrest[first]):
+                leads.append(float(time_to_arrest[first]))
+    lead_time = (
+        {
+            "detected": len(leads),
+            "case_patients": int(len(np.unique(patient_ids[is_case]))),
+            "median_h": round(float(np.median(leads)), 1),
+            "p25_h": round(float(np.percentile(leads, 25)), 1),
+            "p75_h": round(float(np.percentile(leads, 75)), 1),
+        }
+        if leads
+        else {}
+    )
+
+    # The threshold is not part of the model — it is an operating point chosen
+    # after the fact. Sweeping it here lets the dashboard move it live and show
+    # what it costs, instead of presenting one arbitrary choice as settled.
+    news = compute_news_scores(features)
+    positives, total = labels.sum(), len(labels)
+    operating_points = []
+    for cut in np.round(np.linspace(0.01, 0.99, 99), 2):
+        flagged = risk >= cut
+        hits = int(np.sum(flagged & (labels == 1)))
+        operating_points.append(
+            {
+                "threshold": float(cut),
+                "sensitivity": round(float(hits / positives), 4) if positives else 0.0,
+                "specificity": round(float(np.sum(~flagged & (labels == 0)) / np.sum(labels == 0)), 4),
+                "alarms_per_100": round(float(np.sum(flagged) / total * 100), 2),
+            }
+        )
+
+    # The same sweep for NEWS, so "what would the clinical standard cost at this
+    # detection rate" is answerable at any slider position, not just three.
+    news_points = []
+    for cut in np.unique(news):
+        flagged = news >= cut
+        hits = int(np.sum(flagged & (labels == 1)))
+        news_points.append(
+            {
+                "score": float(cut),
+                "sensitivity": round(float(hits / positives), 4) if positives else 0.0,
+                "specificity": round(float(np.sum(~flagged & (labels == 0)) / np.sum(labels == 0)), 4),
+                "alarms_per_100": round(float(np.sum(flagged) / total * 100), 2),
+            }
+        )
+
+    from vitals_explain import global_top_features
+
+    sample = features.sample(min(4000, len(features)), random_state=42)
+    drivers = [
+        {"feature": item["feature"], "description": describe_feature(item["feature"])[0], "value": round(item["mean_abs_shap"], 4)}
+        for item in global_top_features(model, sample, list(features.columns), top_k=10)
+    ]
+
+    return normal_band, {
+        "onset_aligned": onset_aligned,
+        "risk_histogram": risk_histogram,
+        "missingness": missingness,
+        "lead_time": lead_time,
+        "global_drivers": drivers,
+        "operating_points": operating_points,
+        "news_points": news_points,
+        "case_patients": int(len(np.unique(patient_ids[is_case]))),
+        "control_patients": int(len(np.unique(patient_ids[~is_case]))),
+    }
 
 
 def _trim_to_top_patients(service: Service, cohort: VitalSignsCohort, keep: int) -> None:

@@ -108,6 +108,80 @@ export interface BurdenRow {
   news_specificity: number;
 }
 
+/** Percentiles of one vital across control patients — the "normal" reference band. */
+export interface NormalBand {
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+}
+
+/** Mean vitals at a fixed offset before onset, averaged over case patients. */
+export interface OnsetAlignedPoint {
+  /** Negative hours: -24 is a day before onset, 0 is onset. */
+  hours_before: number;
+  n: number;
+  [vital: string]: number;
+}
+
+/** Share of each class whose risk falls in one bin. Shares, not counts. */
+export interface RiskBin {
+  from: number;
+  to: number;
+  positive: number;
+  negative: number;
+}
+
+export interface Missingness {
+  vital: string;
+  label: string;
+  missing: number;
+}
+
+export interface LeadTime {
+  detected: number;
+  case_patients: number;
+  median_h: number;
+  p25_h: number;
+  p75_h: number;
+}
+
+/** Model metrics at one candidate threshold. The threshold is not learned. */
+export interface OperatingPoint {
+  threshold: number;
+  sensitivity: number;
+  specificity: number;
+  alarms_per_100: number;
+}
+
+/** The same, for NEWS, keyed by its integer score instead of a probability. */
+export interface NewsPoint {
+  score: number;
+  sensitivity: number;
+  specificity: number;
+  alarms_per_100: number;
+}
+
+export interface GlobalDriver {
+  feature: string;
+  description: string;
+  value: number;
+}
+
+/** Cohort-level exploratory summaries. All aggregates. */
+export interface Eda {
+  onset_aligned: OnsetAlignedPoint[];
+  risk_histogram: RiskBin[];
+  missingness: Missingness[];
+  lead_time: LeadTime | Record<string, never>;
+  global_drivers: GlobalDriver[];
+  operating_points: OperatingPoint[];
+  news_points: NewsPoint[];
+  case_patients: number;
+  control_patients: number;
+}
+
 /** Cohort-level context shown above the ward list. */
 export interface Overview {
   source: string;
@@ -122,4 +196,7 @@ export interface Overview {
   browsable: number;
   burden: BurdenRow[];
   llm_available: boolean;
+  /** Per-vital control percentiles, keyed by vital name. */
+  normal_band: Record<string, NormalBand>;
+  eda: Eda;
 }
