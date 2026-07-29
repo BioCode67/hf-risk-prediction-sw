@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock, Timer, User } from "lucide-react";
+import { Biohazard, Clock, ShieldCheck, Timer, User } from "lucide-react";
 
 import { RiskBadge } from "@/components/RiskBadge";
 import { Card } from "@/components/ui/card";
@@ -8,25 +8,20 @@ import { formatRisk } from "@/lib/risk";
 import type { PatientDetail, PatientSummary } from "@/lib/types";
 
 /**
- * Patient identity strip, with the selector the reference design lacks — that
- * mock showed a single hard-coded patient, and this cohort has 400.
+ * Patient identity strip. Selection lives in the ward list beside it, so this
+ * only reports who is on screen.
  *
  * Only fields the source record actually carries are shown. Challenge-2019 has
  * age and sex and nothing else, so there is no bed number, ward or admission
  * timestamp here; inventing them would make a demo look like a real chart.
  */
 export function PatientHeader({
-  patients,
   detail,
-  selectedId,
-  onSelect,
+  summary,
 }: {
-  patients: PatientSummary[];
   detail: PatientDetail | null;
-  selectedId: string | null;
-  onSelect: (patientId: string) => void;
+  summary: PatientSummary | null;
 }) {
-  const summary = patients.find((patient) => patient.patient_id === selectedId) ?? null;
   const evidence = detail?.evidence;
 
   return (
@@ -37,45 +32,52 @@ export function PatientHeader({
             <User className="size-4.5" aria-hidden />
           </span>
           <div className="leading-tight">
-            <label htmlFor="patient-select" className="text-subtle-foreground text-[11px]">
-              환자
-            </label>
-            <select
-              id="patient-select"
-              value={selectedId ?? ""}
-              onChange={(event) => onSelect(event.target.value)}
-              className="border-border bg-card block rounded-md border px-2 py-1 text-sm font-semibold tabular-nums"
-            >
-              {patients.map((patient) => (
-                <option key={patient.patient_id} value={patient.patient_id}>
-                  {patient.patient_id} · {formatRisk(patient.risk)}
-                </option>
-              ))}
-            </select>
+            <p className="text-subtle-foreground text-[11px]">환자</p>
+            <p className="text-base font-semibold tabular-nums">{detail?.patient_id ?? "—"}</p>
           </div>
         </div>
 
         <Pill icon={User} label={demographyLabel(detail)} />
         <Pill icon={Clock} label={`관찰 ${detail?.hours_observed ?? "—"}개 윈도우`} />
-        <Pill
-          icon={Timer}
-          label={
-            evidence?.hours_to_arrest != null
-              ? `발병 ${evidence.hours_to_arrest.toFixed(0)}시간 전 시점`
-              : "발병 없음 (대조군)"
-          }
-        />
+        {evidence?.hours_to_arrest != null && (
+          <Pill icon={Timer} label={`보고 있는 시점: 발병 ${evidence.hours_to_arrest.toFixed(0)}시간 전`} />
+        )}
+        <GroundTruth detail={detail} />
       </div>
 
       <div className="flex items-center gap-3">
         {evidence && <RiskBadge level={evidence.risk_level} size="lg" />}
         {summary && (
-          <span className="text-subtle-foreground text-xs tabular-nums">
+          <span className="text-muted-foreground text-xs tabular-nums">
             최근 위험도 <span className="text-foreground font-semibold">{formatRisk(summary.risk)}</span>
           </span>
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * The recorded outcome, not a prediction.
+ *
+ * Kept visually distinct from the risk badge beside it — one is the answer key
+ * and the other is the model's guess, and a screen that lets those blur is
+ * worse than useless when you are judging whether the model was right.
+ */
+function GroundTruth({ detail }: { detail: PatientDetail | null }) {
+  if (!detail) return null;
+  const onset = detail.arrest_hour;
+  const color = onset == null ? "var(--success)" : "var(--critical)";
+
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium"
+      style={{ color, backgroundColor: `color-mix(in oklab, ${color} 14%, transparent)` }}
+    >
+      {onset == null ? <ShieldCheck className="size-3.5" aria-hidden /> : <Biohazard className="size-3.5" aria-hidden />}
+      <span className="text-subtle-foreground font-normal">실제 결과</span>
+      {onset == null ? "패혈증 없음" : `${onset.toFixed(0)}시간째 발병`}
+    </span>
   );
 }
 

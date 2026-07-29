@@ -1,0 +1,5 @@
+# Vercel CLI project link (contains the project/org id).
+.vercel
+
+# Incremental TypeScript build state — machine-local, never useful in a diff.
+tsconfig.tsbuildinfo

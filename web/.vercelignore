@@ -1,0 +1,8 @@
+# Without this file the Vercel CLI falls back to .gitignore, which excludes
+# public/data — the baked cohort snapshot the whole dashboard reads. The site
+# would deploy and then 404 every data file. So the ignore list is spelled out
+# here instead, and public/data is deliberately absent from it.
+
+node_modules
+.next
+.env*.local

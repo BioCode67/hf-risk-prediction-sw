@@ -52,7 +52,8 @@ GPU는 필요 없습니다. 노트북 기본 설정이 CPU이고, 데이터를 3
 | 4 | 시계열 파이프라인 이해 (윈도우·누수·알람부담) | [`notebooks/04_challenge2012_timeseries.ipynb`](notebooks/04_challenge2012_timeseries.ipynb) ← 실데이터 없어도 실행됨 |
 | 5 | 실데이터로 돌려보기 | [`notebooks/03_challenge2019_realdata.ipynb`](notebooks/03_challenge2019_realdata.ipynb) |
 | 6 | 핵심 주장 검증 (오탐 감소가 진짜인가) | [`notebooks/05_challenge2019_sepsis.ipynb`](notebooks/05_challenge2019_sepsis.ipynb) ← 알람부담의 함정·seed 재현성 |
-| 7 | 대회 전략·제안서 | [`docs/`](docs/README.md) |
+| 7 | 완성된 결과물 보기 | **[배포된 대시보드](https://web-ebon-rho-81.vercel.app)** ← 실데이터 400명, 근거·정답 라벨까지 |
+| 8 | 대회 전략·제안서 | [`docs/`](docs/README.md) |
 
 > 처음이라면 2번 노트북부터 여세요. 본 과제 데이터는 양성이 1% 남짓이라 지표가 늘 바닥에
 > 붙어 있어서 배우기가 어렵습니다. 2번은 신호가 뚜렷한 데이터로 흐름만 먼저 익히는 용도입니다.
@@ -77,6 +78,8 @@ hf-risk-prediction-sw/
 │   ├── vitals_data.py          데이터 로드·정제·슬라이딩 윈도우·환자단위 분할
 │   ├── vitals_train.py         XGBoost 학습 + NEWS 비교 + 오경보 지표
 │   ├── vitals_explain.py       SHAP — "왜 위험한가" 설명
+│   ├── vitals_narrate.py       그 근거를 한국어 문장으로 (LLM은 표현만)
+│   ├── vitals_api.py           대시보드용 FastAPI (사전계산 아티팩트 기반)
 │   ├── vitals_report.py        그림 생성 (PR곡선·궤적·lead-time·알람부담)
 │   ├── vitals_phenotype.py     심정지 표현형 군집화 (호흡성/순환성/혼합)
 │   │
@@ -92,6 +95,13 @@ hf-risk-prediction-sw/
 │   ├── model.py                LSTM / GRU 분류기
 │   │
 │   └── README.md               모듈 상세 지도
+│
+├── web/                          ← 패혈증 조기경보 대시보드 (Next.js, 배포됨)
+│   └── README.md               구조·실행·배포 → web/README.md 참고
+│
+├── scripts/
+│   ├── fetch_data.sh           공개 PhysioNet 데이터 내려받기
+│   └── export_dashboard.py     대시보드용 정적 JSON 굽기 (ML 런타임 제거)
 │
 ├── tests/                        pytest — 데이터 없어도 통과 (자동 skip)
 ├── legacy/                       초기 버전 (정적 심부전 예측) — 학습 시 건너뛰세요

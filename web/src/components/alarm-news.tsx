@@ -9,6 +9,7 @@ import {
   LabelList,
   Line,
   LineChart,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -18,6 +19,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { alarmRanges } from "@/lib/alarms";
 import { SERIES, formatRisk } from "@/lib/risk";
 import type { BurdenRow, Evidence, PatientDetail } from "@/lib/types";
 
@@ -57,7 +59,7 @@ export function AlarmNews({
         <CardHeader>
           <CardTitle>경보 추이 — 본 모델 vs NEWS</CardTitle>
           <CardDescription>
-            점을 클릭하면 그 시점의 근거를 봅니다. 두 점수는 축이 달라 따로 그립니다.
+            점을 클릭하면 그 시점의 근거를 봅니다. 두 점수는 축이 달라 따로 그리고, 붉은 음영은 각 점수가 경보한 구간입니다.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-1">
@@ -151,6 +153,11 @@ function TimelinePlot({
   formatValue: (value: number) => string;
   showXAxis?: boolean;
 }) {
+  // Shade this score's own alarm stretches — the NEWS plot marks NEWS alarms,
+  // so the two panels read as a like-for-like comparison rather than one
+  // score's bands imposed on the other.
+  const ranges = alarmRanges(data, threshold, dataKey);
+
   return (
     <figure className="m-0">
       <figcaption className="text-subtle-foreground mb-1 flex items-center gap-1.5 text-xs">
@@ -161,7 +168,33 @@ function TimelinePlot({
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 4, right: 12, bottom: showXAxis ? 6 : 0, left: 0 }} onClick={onClick}>
             <CartesianGrid vertical={false} />
-            <XAxis dataKey="hour" hide={!showXAxis} tickLine={false} axisLine={false} tickMargin={6} />
+            <XAxis
+              dataKey="hour"
+              type="number"
+              domain={["dataMin", "dataMax"]}
+              hide={!showXAxis}
+              tickLine={false}
+              axisLine={false}
+              tickMargin={6}
+              tickFormatter={(hour: number) => `${hour}h`}
+              minTickGap={28}
+              height={26}
+              label={
+                showXAxis
+                  ? { value: "기록 시작 후 경과 시간", position: "insideBottom", offset: -4, fontSize: 11 }
+                  : undefined
+              }
+            />
+            {ranges.map((range) => (
+              <ReferenceArea
+                key={`${range.from}-${range.to}`}
+                x1={range.from}
+                x2={range.to}
+                fill="var(--critical)"
+                fillOpacity={0.12}
+                strokeOpacity={0}
+              />
+            ))}
             <YAxis domain={domain} tickFormatter={tickFormatter} width={40} tickLine={false} axisLine={false} />
             <Tooltip
               cursor={{ stroke: "var(--axis)", strokeWidth: 1 }}
