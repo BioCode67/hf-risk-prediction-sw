@@ -89,6 +89,9 @@
 - 모듈:
   - vitals_data.py     : 합성/KHTH/MIMIC 어댑터, 정제, 윈도우, 개인화·정적 피처, 분할, lead-time
   - vitals_train.py    : XGBoost vs NEWS, AUPRC·민감도@특이도·알람부담·lead-time, Optuna 튜닝·GPU(CUDA)
+                         + 모델 레지스트리 --compare (XGBoost/LightGBM/CatBoost/RandomForest/Logistic)
+                         ※ 합성 데이터에서는 Logistic이 1위 — 합성 신호가 단조 드리프트라 선형에 유리한
+                           탓일 가능성이 큼. 실데이터(Challenge-2019) 재현 전까지 인용 금지
   - vitals_explain.py  : SHAP(전역/윈도우별)
   - vitals_report.py   : 그림 5종(PR-curve·궤적·lead-time·알람부담) render_report()
   - vitals_phenotype.py: 심정지 표현형 군집 + 히트맵

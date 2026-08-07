@@ -12,6 +12,10 @@ Download (no login):
 Run:
     python src/sepsis_explore.py /path/to/training_setA [--gpu] [--tune] [--trials=N]
         [--max-files=N] [--horizon=H] [--window=W] [--gap=G] [--seed=S]
+        [--compare] [--models=logistic,random_forest]
+
+``--compare`` trains the alternative learners (LightGBM, CatBoost, RandomForest,
+LogisticRegression) on the same split and prints the ranked alarm-burden table.
 
 ``--seed`` drives the patient-level split, the Optuna sampler and XGBoost alike, so
 re-running with a different seed re-draws the test patients. A margin over NEWS that
@@ -27,6 +31,7 @@ rate even though ROC shows weak signal. A clinically standard early-warning hori
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from vitals_data import (
@@ -50,13 +55,26 @@ def run(
     window_hours: int = OBSERVATION_WINDOW_HOURS,
     gap_hours: int = GAP_HOURS,
     seed: int = 42,
+    compare: bool = False,
+    compare_with: Sequence[str] | None = None,
+    target_sensitivity: float = 0.90,
 ) -> None:
-    """Load Challenge-2019 vitals and run XGBoost vs NEWS + the full report."""
+    """Load Challenge-2019 vitals and run XGBoost vs NEWS + the full report.
+
+    ``compare=True`` additionally trains the other learners in the registry
+    (LightGBM, CatBoost, RandomForest, LogisticRegression) on the same split and
+    prints the ranked alarm-burden table. This is the real-data version of the
+    comparison — the synthetic cohort's deterioration signal is smooth by
+    construction and flatters linear models, so a ranking is only worth quoting
+    once it has been reproduced here.
+    """
     from vitals_phenotype import discover_phenotypes
     from vitals_report import render_report
     from vitals_train import (
+        compare_models,
         evaluate_news_baseline,
         lead_time_summary,
+        print_comparison,
         threshold_at_specificity,
         train_xgboost,
         tune_xgboost,
@@ -100,6 +118,17 @@ def run(
         print(f"Lead-time: detected {int(lead['detected'])}/{int(lead['arrest_patients'])} events, "
               f"median {lead['median_lead_time_h']:.1f}h before onset (@95% specificity)")
 
+    if compare:
+        print_comparison(
+            compare_models(
+                split,
+                models=compare_with,
+                use_gpu=use_gpu,
+                target_sensitivity=target_sensitivity,
+            ),
+            target_sensitivity,
+        )
+
     models_dir = Path(__file__).resolve().parent.parent / "models"
     print()
     render_report(split, model, cohort, models_dir)
@@ -118,6 +147,9 @@ def main() -> None:
     def _opt(name: str, default: int | None) -> int | None:
         return next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith(f"--{name}=")), default)
 
+    selected = next(
+        (a.split("=", 1)[1].split(",") for a in sys.argv if a.startswith("--models=")), None
+    )
     run(
         positional[0],
         use_gpu="--gpu" in sys.argv,
@@ -128,6 +160,8 @@ def main() -> None:
         window_hours=_opt("window", OBSERVATION_WINDOW_HOURS),
         gap_hours=_opt("gap", GAP_HOURS),
         seed=_opt("seed", 42),
+        compare="--compare" in sys.argv or selected is not None,
+        compare_with=selected,
     )
 
 

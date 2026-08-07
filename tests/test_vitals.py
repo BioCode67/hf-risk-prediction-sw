@@ -343,6 +343,84 @@ def test_lead_time_summary(trained):
     assert summary["median_lead_time_h"] >= 0.0
 
 
+# ---------------------------------------------------------------------------
+# Model zoo & head-to-head comparison
+# ---------------------------------------------------------------------------
+
+
+def test_available_models_includes_xgboost():
+    """The registry always offers XGBoost; the rest depend on what is installed."""
+    from vitals_train import MODEL_NAMES, available_models
+
+    usable = available_models()
+    assert "xgboost" in usable
+    assert set(usable) <= set(MODEL_NAMES)
+
+
+def test_build_model_rejects_unknown_name():
+    """A typo'd model name fails loudly instead of silently falling back."""
+    from vitals_train import build_model
+
+    with pytest.raises(ValueError, match="Unknown model"):
+        build_model("randomforest", np.array([0, 1]))
+
+
+@pytest.mark.parametrize("name", ["logistic", "random_forest"])
+def test_alternative_models_learn_signal(trained, name):
+    """The non-XGBoost learners fit, emit probabilities, and beat the base rate."""
+    from vitals_train import train_model
+
+    _model, _metrics, split = trained
+    model, metrics = train_model(name, split)
+    score = model.predict_proba(split.X_test)[:, 1]
+    assert score.shape == (len(split.y_test),)
+    assert np.all((score >= 0.0) & (score <= 1.0))
+    assert metrics.auprc > metrics.prevalence  # better than always-alarm
+
+
+def test_compare_models_ranks_by_auprc(trained):
+    """Comparison returns one row per model plus NEWS, sorted best-AUPRC first."""
+    from vitals_train import compare_models
+
+    _model, _metrics, split = trained
+    results = compare_models(split, models=["logistic", "random_forest"], target_sensitivity=0.9)
+
+    names = [result.name for result in results]
+    assert set(names) == {"logistic", "random_forest", "news"}
+    auprcs = [result.metrics.auprc for result in results]
+    assert auprcs == sorted(auprcs, reverse=True)
+
+    for result in results:
+        assert 0.0 <= result.alarm_burden["alarms_per_100_windows"] <= 100.0
+        assert result.alarm_burden["sensitivity"] >= 0.9 - 1e-9  # the point is matched
+        assert set(result.summary()) == {
+            "model",
+            "key",
+            "metrics",
+            "alarm_burden",
+            "lead_time",
+            "fit_seconds",
+        }
+
+
+def test_compare_models_skips_missing_packages(trained, monkeypatch):
+    """A model whose package is absent is skipped, not fatal — the 안심존 case."""
+    import vitals_train
+
+    _model, _metrics, split = trained
+    real_build = vitals_train.build_model
+
+    def fake_build(name, y_train, **kwargs):
+        if name == "logistic":
+            raise vitals_train.ModelUnavailable("pretend scikit-learn is missing")
+        return real_build(name, y_train, **kwargs)
+
+    monkeypatch.setattr(vitals_train, "build_model", fake_build)
+    results = vitals_train.compare_models(split, models=["logistic", "random_forest"])
+    assert [result.name for result in results] != []
+    assert "logistic" not in {result.name for result in results}
+
+
 def test_shap_window_factors(trained):
     """Per-window SHAP returns the requested number of drivers with expected keys."""
     from vitals_explain import window_risk_factors
