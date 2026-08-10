@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDashboard } from "@/hooks/useDashboard";
 import { decide, reevaluate } from "@/lib/decision";
+import { RISK_META, formatRisk } from "@/lib/risk";
 
 /**
  * Ward list on the left, one patient's story on the right.
@@ -93,6 +94,15 @@ export default function Page() {
           </Card>
 
           <div className="flex min-w-0 flex-col gap-4 md:gap-5">
+            {/* Picking a row silently replaces this whole column. Without an
+                announcement the change is invisible to a screen reader, which
+                is still sitting on the ward list where the click happened. */}
+            <p aria-live="polite" className="sr-only">
+              {detail && evidence
+                ? `환자 ${detail.patient_id}, ${evidence.hour}시간째. 위험도 ${formatRisk(evidence.risk)}, ${RISK_META[evidence.risk_level].label}.`
+                : ""}
+            </p>
+
             {errors.detail && <ErrorNote message={errors.detail} />}
 
             <PatientHeader
@@ -142,6 +152,7 @@ export default function Page() {
                     eda={overview.eda}
                     threshold={cut}
                     defaultThreshold={overview.threshold}
+                    positiveRate={overview.positive_rate}
                     onChange={setThreshold}
                   />
                 )}

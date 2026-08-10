@@ -24,11 +24,14 @@ export function ThresholdControl({
   eda,
   threshold,
   defaultThreshold,
+  positiveRate,
   onChange,
 }: {
   eda: Eda;
   threshold: number;
   defaultThreshold: number;
+  /** Share of windows that are actually pre-onset — the floor any alarm count sits on. */
+  positiveRate: number;
   onChange: (threshold: number) => void;
 }) {
   const point = nearest(eda.operating_points, threshold);
@@ -115,6 +118,26 @@ export function ThresholdControl({
               ) : (
                 "이 지점에서는 NEWS 대비 이점이 없습니다."
               )}
+            </p>
+
+            {/* `nearest` snaps to the exported grid, which is 1%-spaced. At the
+                default operating point — below 1% on an imbalanced cohort —
+                the readout and the figures under it are therefore different
+                thresholds, and saying so costs one line. */}
+            {Math.abs(point.threshold - threshold) > 0.005 && (
+              <p className="text-subtle-foreground text-[11px] leading-relaxed">
+                위 지표는 {formatRisk(point.threshold)} 격자점에서 측정한 값입니다. 운영점 격자가 1%
+                간격이라 슬라이더 값과 정확히 같지는 않습니다.
+              </p>
+            )}
+
+            {/* The baseline the two alarm counts above sit on. Without it "2.0
+                alarms per 100" reads as small, when the thing being caught
+                occupies 1.2 of those 100 windows to begin with. */}
+            <p className="text-subtle-foreground text-[11px] leading-relaxed">
+              이 코호트의 양성률은 {(positiveRate * 100).toFixed(2)}%입니다 — 윈도우 100개 중{" "}
+              {(positiveRate * 100).toFixed(1)}개가 실제 발병 직전 구간입니다. 위의 알람 수는 이 값을
+              바닥에 두고 읽어야 합니다.
             </p>
           </>
         ) : (

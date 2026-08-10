@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ShieldQuestion } from "lucide-react";
+import { RotateCcw, ShieldQuestion } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -44,9 +44,10 @@ export function AlarmNews({
   detail: PatientDetail;
   burden: BurdenRow[];
   selectedHour: number | null;
-  onSelectHour: (hour: number) => void;
+  onSelectHour: (hour: number | null) => void;
 }) {
-  const pinned = selectedHour ?? detail.timeline.at(-1)?.hour ?? null;
+  const latest = detail.timeline.at(-1)?.hour ?? null;
+  const pinned = selectedHour ?? latest;
   const point = detail.timeline.find((item) => item.hour === pinned) ?? null;
 
   const handleClick = (next: { activeLabel?: string | number }) => {
@@ -63,17 +64,28 @@ export function AlarmNews({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-1">
-          <p className="text-muted-foreground text-xs">
-            {point ? (
-              <>
-                <span className="text-foreground font-medium tabular-nums">{point.hour}시간째</span> · 위험도{" "}
-                <span className="text-foreground font-medium tabular-nums">{formatRisk(point.risk)}</span> · NEWS{" "}
-                <span className="text-foreground font-medium tabular-nums">{point.news_score.toFixed(0)}</span>
-              </>
-            ) : (
-              "선택된 시점이 없습니다."
+          <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            <p>
+              {point ? (
+                <>
+                  <span className="text-foreground font-medium tabular-nums">{point.hour}시간째</span> · 위험도{" "}
+                  <span className="text-foreground font-medium tabular-nums">{formatRisk(point.risk)}</span> · NEWS{" "}
+                  <span className="text-foreground font-medium tabular-nums">{point.news_score.toFixed(0)}</span>
+                </>
+              ) : (
+                "선택된 시점이 없습니다."
+              )}
+            </p>
+            {/* Clicking a point was a one-way door: the timeline could only ever
+                set an hour, so once you pinned one there was no way back to the
+                patient's latest window short of reselecting the patient. */}
+            {selectedHour != null && selectedHour !== latest && (
+              <Button variant="ghost" size="sm" onClick={() => onSelectHour(null)}>
+                <RotateCcw size={12} aria-hidden />
+                최신 시점
+              </Button>
             )}
-          </p>
+          </div>
 
           <TimelinePlot
             height={150}
