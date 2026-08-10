@@ -5,8 +5,14 @@ import type { RiskLevel } from "./types";
 
 /**
  * Status bands. Each carries an icon and a Korean label so the state is never
- * conveyed by colour alone — two of these four sit below 3:1 on the light
- * surface by design, and the icon + label pairing is what makes that legal.
+ * conveyed by colour alone.
+ *
+ * These read the `--status-*` ramp, which is the *text* cut of the status
+ * palette and is themed for legibility — not `--success`/`--critical`/…, which
+ * are the chart fills and are far too light to set type in. The names must
+ * exist in `globals.css`: an undeclared custom property makes the whole `color`
+ * invalid at computed-value time, and that does not fail loudly — the badge
+ * silently inherits body text and the status system stops meaning anything.
  */
 export const RISK_META: Record<RiskLevel, { label: string; color: string; Icon: LucideIcon }> = {
   good: { label: "안정", color: "var(--status-good)", Icon: CheckCircle2 },

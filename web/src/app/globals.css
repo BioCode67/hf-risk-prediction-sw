@@ -38,11 +38,21 @@
   --diverge-raise: #e34948;
   --diverge-lower: #2a78d6;
 
-  /* Status palette (fixed, never themed) — always paired with an icon + label. */
+  /* Status palette — marks and fills. Sized for area fills, shaded bands and
+     icon strokes, where the surrounding surface carries the contrast. Never set
+     type in these: at 14px on the card, --warning lands near 1.8:1. */
   --success: #0ca30c;
   --warning: #fab219;
   --serious: #ec835a;
   --critical: #d03b3b;
+
+  /* The same four states as *text*. Darkened until every one clears 4.5:1 on
+     the card surface, so a status label is readable on its own terms and the
+     colour stays a redundant cue on top of the icon + word. */
+  --status-good: #0f7a12;
+  --status-warning: #8a5a00;
+  --status-serious: #b04a1e;
+  --status-critical: #c02626;
 
   --radius: 0.75rem;
 }
@@ -71,6 +81,12 @@
 
   --diverge-raise: #e66767;
   --diverge-lower: #3987e5;
+
+  /* Inverted: on the dark card the readable cut is the lighter one. */
+  --status-good: #4ade4a;
+  --status-warning: #f5c04a;
+  --status-serious: #f0906a;
+  --status-critical: #f26b6b;
 }
 
 @theme inline {

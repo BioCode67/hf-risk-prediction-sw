@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { SERIES } from "@/lib/risk";
+import { SERIES, formatRisk } from "@/lib/risk";
 import type { Eda } from "@/lib/types";
 
 /**
@@ -53,24 +53,29 @@ export function ThresholdControl({
 
       <CardContent className="space-y-4">
         <div className="flex items-center gap-3">
+          {/* The floor has to clear the exported operating point, which on an
+              imbalanced cohort lands near 0.004. A hard `min` of 0.01 put the
+              default below the track: the slider pinned to its minimum, showed
+              a value it was not set to, and could never be dragged back. */}
           <input
             type="range"
-            min={0.01}
+            min={Math.min(0.01, defaultThreshold)}
             max={0.99}
-            step={0.01}
+            step="any"
             value={threshold}
             onChange={(event) => onChange(Number(event.target.value))}
             aria-label="경보 임계값"
+            aria-valuetext={formatRisk(threshold)}
             className="accent-primary h-2 flex-1 cursor-pointer"
           />
           <span className="w-16 text-right text-lg font-semibold tabular-nums">
-            {(threshold * 100).toFixed(0)}%
+            {formatRisk(threshold)}
           </span>
           <Button
             variant="ghost"
             size="sm"
             onClick={() => onChange(defaultThreshold)}
-            disabled={Math.abs(threshold - defaultThreshold) < 0.005}
+            disabled={Math.abs(threshold - defaultThreshold) < 0.0005}
             aria-label="기본 임계값으로 되돌리기"
           >
             <RotateCcw size={13} aria-hidden />
