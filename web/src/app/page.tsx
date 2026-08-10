@@ -78,7 +78,11 @@ export default function Page() {
                   : "불러오는 중…"}
               </CardDescription>
             </CardHeader>
-            <div className="flex min-h-0 flex-1 flex-col xl:h-[calc(100svh-11rem)]">
+            {/* Bounded below xl too. Unbounded, the 400-row list stacked above
+                the detail column and pushed it ~20,000px down the page — on a
+                phone the dashboard was unreachable without scrolling past the
+                whole ward. */}
+            <div className="flex h-[26rem] min-h-0 flex-1 flex-col xl:h-[calc(100svh-11rem)]">
               <PatientList
                 patients={rows}
                 selectedId={selectedPatientId}

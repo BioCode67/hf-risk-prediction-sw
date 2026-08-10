@@ -17,10 +17,11 @@
  *    so the UI dims rather than collapsing to a skeleton (no layout jump).
  */
 
-import { useCallback, useEffect, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 import { ApiError, api } from "@/lib/api";
 import type { Narration, Overview, PatientDetail, PatientSummary } from "@/lib/types";
+import { readView, writeView } from "@/lib/url";
 
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 
@@ -140,7 +141,40 @@ const aborted = (error: unknown) => error instanceof DOMException && error.name 
 
 export function useDashboard(patientLimit = 40) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const { selectedPatientId, selectedHour } = state;
+  const { selectedPatientId, selectedHour, threshold } = state;
+
+  /**
+   * Adopt the URL once, before anything lands.
+   *
+   * Ordering carries the whole thing: this runs before the fetches resolve, and
+   * both `patients/ok` and `overview/ok` only fill in their defaults when the
+   * slot is still empty (`?? `). So a link's patient and threshold win over
+   * "highest-risk patient" and "exported operating point" without either
+   * reducer case needing to know the URL exists.
+   */
+  useEffect(() => {
+    const view = readView();
+    if (view.patientId) dispatch({ type: "selectPatient", patientId: view.patientId });
+    if (view.hour != null) dispatch({ type: "selectHour", hour: view.hour });
+    if (view.threshold != null) dispatch({ type: "setThreshold", threshold: view.threshold });
+  }, []);
+
+  /**
+   * …and mirror it back out on every change, so the address bar is shareable.
+   *
+   * The first run is skipped deliberately. Effects in one commit see that
+   * commit's state, so on mount this would fire with the still-empty initial
+   * state and wipe the very parameters the effect above is in the middle of
+   * adopting.
+   */
+  const mirrored = useRef(false);
+  useEffect(() => {
+    if (!mirrored.current) {
+      mirrored.current = true;
+      return;
+    }
+    writeView({ patientId: selectedPatientId, hour: selectedHour, threshold });
+  }, [selectedPatientId, selectedHour, threshold]);
 
   useEffect(() => {
     const controller = new AbortController();

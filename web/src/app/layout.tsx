@@ -1,10 +1,29 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 
 import "./globals.css";
 
+const DESCRIPTION =
+  "개인 기저선 이탈 기반의 설명가능한 조기경보 — 연구·교육용 데모. 의료기기가 아닙니다.";
+
 export const metadata: Metadata = {
   title: "활력징후 조기경보 대시보드",
-  description: "개인 기저선 이탈 기반의 설명가능한 조기경보 — 연구·교육용 데모",
+  description: DESCRIPTION,
+  // Deep links are shareable now (see lib/url.ts), so they get unfurled in chat
+  // apps. Without this the card falls back to the bare URL.
+  openGraph: {
+    title: "활력징후 조기경보 대시보드",
+    description: DESCRIPTION,
+    locale: "ko_KR",
+    type: "website",
+  },
+};
+
+/** Matches the two `--background` values, so the browser chrome does not fight the page. */
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f9f9f7" },
+    { media: "(prefers-color-scheme: dark)", color: "#0d0d0d" },
+  ],
 };
 
 /**
