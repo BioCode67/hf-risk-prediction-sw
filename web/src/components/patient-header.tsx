@@ -45,11 +45,26 @@ export function PatientHeader({
         <GroundTruth detail={detail} />
       </div>
 
+      {/* Both numbers are labelled with the hour they belong to. The badge
+          describes the window being viewed; the figure beside it used to be
+          the *latest* window unconditionally, so pinning an early hour put
+          "안정" next to "최근 위험도 100.0%" with nothing saying they were
+          different points in time. The latest now appears only when it is not
+          the one on screen. */}
       <div className="flex items-center gap-3">
-        {evidence && <RiskBadge level={evidence.risk_level} size="lg" />}
-        {summary && (
-          <span className="text-muted-foreground text-xs tabular-nums">
-            최근 위험도 <span className="text-foreground font-semibold">{formatRisk(summary.risk)}</span>
+        {evidence && (
+          <div className="flex items-center gap-2">
+            <RiskBadge level={evidence.risk_level} size="lg" />
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {evidence.hour}시간째{" "}
+              <span className="text-foreground font-semibold">{formatRisk(evidence.risk)}</span>
+            </span>
+          </div>
+        )}
+        {summary && evidence && evidence.hour !== summary.last_hour && (
+          <span className="text-subtle-foreground border-border border-l pl-3 text-xs tabular-nums">
+            최근({summary.last_hour}시간째){" "}
+            <span className="text-muted-foreground font-medium">{formatRisk(summary.risk)}</span>
           </span>
         )}
       </div>

@@ -103,6 +103,46 @@ export function VitalsChart({
   );
 }
 
+/** Bounds a reading physically cannot cross, so padding never invents one. */
+const AXIS_LIMITS: Record<string, { max?: number }> = {
+  spo2: { max: 100 },
+};
+
+const roundTo = (value: number, step: number, mode: "floor" | "ceil") =>
+  Number((Math[mode](value / step) * step).toFixed(3));
+
+/**
+ * The y-range for one vital: what it actually spans, plus a share of that span.
+ *
+ * The padding has to scale with the variable. A flat ±2 is most of a
+ * temperature trace and almost none of a blood pressure one — on this cohort it
+ * left the temperature line filling 12% of its plot height while pulse filled
+ * 92%, which reads as "temperature is not doing anything" when the axis, not
+ * the patient, is what is flat.
+ *
+ * The control band is folded in because it is drawn, so it has to fit. Physical
+ * ceilings are applied last: SpO2 padded past 100 put a reading on the axis
+ * that cannot exist.
+ */
+function axisDomain(
+  values: number[],
+  band: NormalBand | null,
+  vital: string,
+): [number, number] | undefined {
+  if (values.length === 0) return undefined; // nothing measured — let recharts decide
+  const lo = Math.min(...values, band?.p25 ?? Infinity);
+  const hi = Math.max(...values, band?.p75 ?? -Infinity);
+  const span = hi - lo;
+
+  // A vital that never moved still needs a band to be drawn in.
+  const pad = span > 0 ? span * 0.12 : Math.max(Math.abs(hi) * 0.02, 0.5);
+  const step = span >= 20 ? 1 : span >= 5 ? 0.5 : 0.1;
+
+  const min = Math.max(roundTo(lo - pad, step, "floor"), 0);
+  const max = Math.min(roundTo(hi + pad, step, "ceil"), AXIS_LIMITS[vital]?.max ?? Infinity);
+  return max > min ? [min, max] : undefined;
+}
+
 function VitalPlot({
   vital,
   trajectory,
@@ -122,6 +162,22 @@ function VitalPlot({
     hour: point.hour,
     value: point[vital.vital] as number | null,
   }));
+  const measured = series
+    .map((point) => point.value)
+    .filter((value): value is number => value != null);
+  const domain = axisDomain(measured, band, vital.vital);
+  // Sub-unit ranges (temperature) need a decimal; integers elsewhere stay clean.
+  const decimals = domain && domain[1] - domain[0] < 5 ? 1 : 0;
+  // Pinned to the domain's own thirds. Left to itself recharts picks ticks that
+  // land unevenly once the range is fractional (36.5 · 36.8 · 37.0 · 37.4), and
+  // asking for five in a 112px plot makes it silently drop the fourth — which
+  // reads as a missing gridline rather than a deliberate scale.
+  const ticks = domain
+    ? Array.from({ length: 4 }, (_, index) => domain[0] + ((domain[1] - domain[0]) * index) / 3).filter(
+        (value, index, all) =>
+          all.findIndex((other) => other.toFixed(decimals) === value.toFixed(decimals)) === index,
+      )
+    : undefined;
 
   return (
     <figure className="m-0">
@@ -149,11 +205,10 @@ function VitalPlot({
               height={18}
             />
             <YAxis
-              width={32}
-              domain={[
-                (min: number) => Math.floor(Math.min(min, band?.p25 ?? min) - 2),
-                (max: number) => Math.ceil(Math.max(max, band?.p75 ?? max) + 2),
-              ]}
+              width={36}
+              domain={domain ?? ["auto", "auto"]}
+              ticks={ticks}
+              tickFormatter={(value: number) => value.toFixed(decimals)}
               tickLine={false}
               axisLine={false}
             />

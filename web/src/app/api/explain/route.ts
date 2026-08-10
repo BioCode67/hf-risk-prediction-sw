@@ -16,6 +16,7 @@ export const runtime = "nodejs";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
+const MAX_EVIDENCE_CHARS = 4000;
 
 /** Mirrors SYSTEM_PROMPT in src/vitals_narrate.py — keep the two in step. */
 const SYSTEM_PROMPT = `당신은 병동 조기경보 시스템의 설명 생성기입니다. 모델이 계산한 근거를 임상의료진이 읽을 한국어 문장으로 옮기는 것이 유일한 역할입니다.
@@ -51,6 +52,17 @@ export async function POST(request: Request) {
   }
   if (typeof text !== "string" || !text.trim()) {
     return NextResponse.json({ detail: "근거 블록(text)이 비어 있습니다." }, { status: 400 });
+  }
+  // `text` is whatever the caller sends, and this route is a public URL holding
+  // a billable API key. A real evidence block is a few hundred characters; the
+  // cap keeps an oversized body from being forwarded at our expense. It bounds
+  // the cost of abuse, it does not prevent it — anything beyond a demo needs a
+  // rate limit and an origin check here.
+  if (text.length > MAX_EVIDENCE_CHARS) {
+    return NextResponse.json(
+      { detail: `근거 블록이 너무 깁니다 (${MAX_EVIDENCE_CHARS}자 이하).` },
+      { status: 413 },
+    );
   }
 
   let response: Response;
