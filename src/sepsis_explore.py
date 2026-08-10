@@ -13,9 +13,15 @@ Run:
     python src/sepsis_explore.py /path/to/training_setA [--gpu] [--tune] [--trials=N]
         [--max-files=N] [--horizon=H] [--window=W] [--gap=G] [--seed=S]
         [--compare] [--models=logistic,random_forest]
+        [--rank-by=f1] [--tune-metric=f1]
 
 ``--compare`` trains the alternative learners (LightGBM, CatBoost, RandomForest,
 LogisticRegression) on the same split and prints the ranked alarm-burden table.
+``--rank-by=f1`` sorts that table by the best F1 reachable at any threshold
+instead of AUPRC, and ``--tune-metric=f1`` points the Optuna search at the same
+quantity. At a ~1% positive rate F1 is dominated by precision and weights a
+missed onset exactly as a false alarm does, so read it next to the alarm-burden
+columns rather than instead of them.
 
 ``--seed`` drives the patient-level split, the Optuna sampler and XGBoost alike, so
 re-running with a different seed re-draws the test patients. A margin over NEWS that
@@ -58,6 +64,8 @@ def run(
     compare: bool = False,
     compare_with: Sequence[str] | None = None,
     target_sensitivity: float = 0.90,
+    rank_by: str = "auprc",
+    tune_metric: str = "auprc",
 ) -> None:
     """Load Challenge-2019 vitals and run XGBoost vs NEWS + the full report.
 
@@ -103,12 +111,16 @@ def run(
         return
 
     split = patient_level_split(windowed, seed=seed)
-    best = tune_xgboost(split, n_trials=n_trials, use_gpu=use_gpu, seed=seed) if tune else {}
+    best = (
+        tune_xgboost(split, n_trials=n_trials, use_gpu=use_gpu, seed=seed, metric=tune_metric)
+        if tune
+        else {}
+    )
     model, xgb = train_xgboost(split, use_gpu=use_gpu, random_state=seed, **best)
     news = evaluate_news_baseline(split)
     for m in (xgb, news):
         print(
-            f"{m.model_name:8s} AUPRC={m.auprc:.3f} ROC={m.roc_auc:.3f} "
+            f"{m.model_name:8s} AUPRC={m.auprc:.3f} bestF1={m.best_f1:.3f} ROC={m.roc_auc:.3f} "
             f"sens@95spec={m.sensitivity_at_95_specificity:.3f} falseAlarm={m.false_alarm_rate:.3f}"
         )
 
@@ -125,8 +137,10 @@ def run(
                 models=compare_with,
                 use_gpu=use_gpu,
                 target_sensitivity=target_sensitivity,
+                rank_by=rank_by,
             ),
             target_sensitivity,
+            rank_by=rank_by,
         )
 
     models_dir = Path(__file__).resolve().parent.parent / "models"
@@ -147,6 +161,9 @@ def main() -> None:
     def _opt(name: str, default: int | None) -> int | None:
         return next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith(f"--{name}=")), default)
 
+    def _str_opt(name: str, default: str) -> str:
+        return next((a.split("=", 1)[1] for a in sys.argv if a.startswith(f"--{name}=")), default)
+
     selected = next(
         (a.split("=", 1)[1].split(",") for a in sys.argv if a.startswith("--models=")), None
     )
@@ -162,6 +179,8 @@ def main() -> None:
         seed=_opt("seed", 42),
         compare="--compare" in sys.argv or selected is not None,
         compare_with=selected,
+        rank_by=_str_opt("rank-by", "auprc"),
+        tune_metric=_str_opt("tune-metric", "auprc"),
     )
 
 

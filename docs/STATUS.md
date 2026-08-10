@@ -84,14 +84,44 @@
 3번은 숨기지 말고 방법론으로 다루는 편이 참신성·실현성 점수에 유리합니다 — 라벨 정의의
 한계를 발견하고 대응한 것 자체가 서사가 됩니다.
 
+## 5-2. 모델 5종 비교 (Challenge-2019 실데이터) — 완료
+
+`python src/sepsis_explore.py data/challenge2019/training_setA --horizon=6 --compare --rank-by=f1`
+20,336명 / 633,009 윈도우 / 양성 7,428개(1.17%). 전 모델이 동일 분할·동일 피처·
+**동일 기본 하이퍼파라미터**(한쪽만 튜닝하면 탐색예산 순위가 됨).
+
+| 모델 | AUPRC | bestF1 | ROC-AUC | sens@95spec | fit(s) |
+|---|---|---|---|---|---|
+| XGBoost | 0.0270 | **0.0700** | 0.679 | 0.184 | 10.9 |
+| CatBoost | **0.0282** | 0.0678 | 0.684 | 0.179 | 26.9 |
+| LogisticRegression | 0.0223 | 0.0572 | 0.646 | 0.145 | 19.0 |
+| LightGBM | 0.0242 | 0.0561 | 0.667 | 0.145 | 6.7 |
+| RandomForest | 0.0226 | 0.0526 | 0.660 | 0.121 | 40.9 |
+| NEWS | 0.0154 | 0.0341 | 0.583 | 0.059 | — |
+
+읽는 법 세 가지:
+
+1. **합성 데이터의 Logistic 1위는 재현되지 않았습니다.** 실데이터에서는 3위로 내려가고
+   부스팅 3종 중 2종에 밀립니다 — 합성 신호가 단조 드리프트라 선형에 유리했던 것이 맞았고,
+   따라서 **현재 XGBoost 선택은 유지**입니다.
+2. **XGBoost와 CatBoost는 사실상 동률**입니다(AUPRC는 CatBoost, bestF1은 XGBoost가 근소 우위,
+   차이 0.001~0.002는 분할 노이즈 범위). 바꿀 이유가 없고, CatBoost는 학습이 2.5배 느립니다.
+3. **F1 절대값 0.07은 낮아 보이지만 "전부 경보" 기준선이 0.023입니다**(양성률 1.17%에서
+   2p/(1+p)). 즉 3배. NEWS는 0.034로 1.5배에 그칩니다. F1을 인용할 때는 이 기준선을
+   반드시 같이 적으십시오 — 안 그러면 "F1 0.07짜리 모델"로 읽힙니다.
+
+**주의:** 이 데이터에서 90% 매칭 민감도는 §5-1 3번과 같은 이유로 무의미합니다(NEWS 특이도 0,
+알람 100/100). 알람부담 비교는 `--sens 0.5` 또는 `0.7`로 읽으십시오.
+
 ## 6. 코드 자산 (repo)
 - 브랜치: claude/cardiac-arrest-early-warning-07fq9e (github.com/BioCode67/hf-risk-prediction-sw)
 - 모듈:
   - vitals_data.py     : 합성/KHTH/MIMIC 어댑터, 정제, 윈도우, 개인화·정적 피처, 분할, lead-time
-  - vitals_train.py    : XGBoost vs NEWS, AUPRC·민감도@특이도·알람부담·lead-time, Optuna 튜닝·GPU(CUDA)
+  - vitals_train.py    : XGBoost vs NEWS, AUPRC·F1·민감도@특이도·알람부담·lead-time, Optuna 튜닝·GPU(CUDA)
                          + 모델 레지스트리 --compare (XGBoost/LightGBM/CatBoost/RandomForest/Logistic)
-                         ※ 합성 데이터에서는 Logistic이 1위 — 합성 신호가 단조 드리프트라 선형에 유리한
-                           탓일 가능성이 큼. 실데이터(Challenge-2019) 재현 전까지 인용 금지
+                         + F1 지표군: bestF1(임계값 무관 최대) / F1@matched-sens / 전부-경보 기준선 대비 배수
+                           --rank-by=f1 (표 정렬) · --tune-metric=f1 (Optuna 목적함수)
+                         ※ 실데이터 검증 결과는 §5-2
   - vitals_explain.py  : SHAP(전역/윈도우별)
   - vitals_report.py   : 그림 5종(PR-curve·궤적·lead-time·알람부담) render_report()
   - vitals_phenotype.py: 심정지 표현형 군집 + 히트맵

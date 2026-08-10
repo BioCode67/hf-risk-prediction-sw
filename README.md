@@ -93,7 +93,7 @@ hf-risk-prediction-sw/
 │   │
 │   │  ── 시계열 트랙 ── 이 프로젝트의 본체. 활력징후 → 심정지 예측
 │   ├── vitals_data.py          데이터 로드·정제·슬라이딩 윈도우·환자단위 분할
-│   ├── vitals_train.py         XGBoost 학습 + NEWS 비교 + 오경보 지표 (--compare 로 모델 5종 비교)
+│   ├── vitals_train.py         XGBoost 학습 + NEWS 비교 + 오경보·F1 지표 (--compare 로 모델 5종 비교)
 │   ├── vitals_explain.py       SHAP — "왜 위험한가" 설명
 │   ├── vitals_narrate.py       그 근거를 한국어 문장으로 (LLM은 표현만)
 │   ├── vitals_api.py           대시보드용 FastAPI (사전계산 아티팩트 기반)
@@ -233,6 +233,8 @@ python src/sepsis_explore.py data/challenge2019/training_setA --horizon=6 --tune
 | GPU로 학습 | `python src/vitals_train.py --gpu` |
 | 모델 5종 비교 | `python src/vitals_train.py --compare` |
 | 비교할 모델 지정 | `python src/vitals_train.py --models logistic,random_forest` |
+| F1 기준으로 정렬 | `python src/vitals_train.py --compare --rank-by f1` |
+| F1을 튜닝 목적함수로 | `python src/vitals_train.py --tune --tune-metric f1 --gpu` |
 | SHAP 설명 | `python src/vitals_explain.py` |
 | 그림 전부 생성 | `python src/vitals_report.py` |
 | 심정지 표현형 군집 | `python src/vitals_phenotype.py` |

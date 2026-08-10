@@ -26,6 +26,7 @@ import pandas as pd
 from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,
+    precision_recall_curve,
     roc_auc_score,
     roc_curve,
 )
@@ -56,6 +57,18 @@ class EarlyWarningMetrics:
     threshold: float
     prevalence: float
     confusion_matrix: list[list[int]]
+    # F-score is threshold-dependent, so two are carried: the one you actually
+    # get at the 95%-specificity operating point above, and the best the model
+    # could reach at *any* threshold. Only the second is a property of the model.
+    f1_at_threshold: float = 0.0
+    # F1 of the trivial "alarm on every window" model, 2p/(1+p) at prevalence p.
+    # At a ~1% positive rate that floor is ~0.023, so a raw F1 of 0.07 is a 3x
+    # lift and not the near-zero failure it looks like without the reference.
+    f1_all_alarm_baseline: float = 0.0
+    best_f1: float = 0.0
+    best_f1_threshold: float = 0.0
+    best_f1_precision: float = 0.0
+    best_f1_recall: float = 0.0
 
 
 def scale_pos_weight(y: np.ndarray) -> float:
@@ -65,6 +78,56 @@ def scale_pos_weight(y: np.ndarray) -> float:
     if positives == 0:
         return 1.0
     return negatives / positives
+
+
+def f_score(precision: float, recall: float, beta: float = 1.0) -> float:
+    """F-beta from precision and recall; 0.0 when both are 0 (no alarms, no hits).
+
+    ``beta=1`` weights a missed arrest and a false alarm equally. That is rarely
+    the clinical trade-off here — ``beta=2`` weights recall 4x, which is closer to
+    how a rapid-response team actually values the two errors — so the beta in use
+    is always worth stating alongside the number.
+    """
+    denominator = (beta * beta * precision) + recall
+    if denominator <= 0:
+        return 0.0
+    return float((1 + beta * beta) * precision * recall / denominator)
+
+
+def best_f_score(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    beta: float = 1.0,
+) -> dict[str, float]:
+    """Best achievable F-beta over every threshold, and where it sits.
+
+    Swept off the precision-recall curve, so unlike an F-score read at a fixed
+    operating point this is threshold-free and comparable across models. At a ~1%
+    positive rate the maximizing threshold is usually far below 0.5 — quoting
+    ``f1`` at the default 0.5 cutoff mostly measures the class imbalance.
+    """
+    y_true = np.asarray(y_true)
+    if np.unique(y_true).size < 2:
+        return {"beta": float(beta), "f_score": 0.0, "threshold": 0.0, "precision": 0.0, "recall": 0.0}
+
+    precision, recall, thresholds = precision_recall_curve(y_true, y_score)
+    # precision_recall_curve appends a (1, 0) point with no threshold behind it.
+    precision, recall = precision[:-1], recall[:-1]
+    denominator = (beta * beta * precision) + recall
+    scores = np.divide(
+        (1 + beta * beta) * precision * recall,
+        denominator,
+        out=np.zeros_like(denominator),
+        where=denominator > 0,
+    )
+    best = int(np.argmax(scores))
+    return {
+        "beta": float(beta),
+        "f_score": float(scores[best]),
+        "threshold": float(thresholds[best]),
+        "precision": float(precision[best]),
+        "recall": float(recall[best]),
+    }
 
 
 def sensitivity_at_specificity(
@@ -141,6 +204,8 @@ def alarm_burden(
         "threshold": float(threshold),
         "sensitivity": float(sensitivity),
         "specificity": float(specificity),
+        "precision": float(precision),
+        "f1": f_score(precision, sensitivity),
         "false_alarm_rate": float(1.0 - precision) if (tp + fp) > 0 else 0.0,
         "alarms_per_100_windows": float(100.0 * pred.mean()),
     }
@@ -161,6 +226,8 @@ def evaluate(
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    best_f1 = best_f_score(y_true, y_score, beta=1.0)
+    prevalence = float(np.mean(y_true))
 
     return EarlyWarningMetrics(
         model_name=model_name,
@@ -173,8 +240,14 @@ def evaluate(
         false_alarm_rate=float(1.0 - precision) if (tp + fp) > 0 else 0.0,
         alarms_per_100_windows=float(100.0 * pred.mean()),
         threshold=float(threshold),
-        prevalence=float(np.mean(y_true)),
+        prevalence=prevalence,
         confusion_matrix=cm.tolist(),
+        f1_at_threshold=f_score(precision, recall),
+        f1_all_alarm_baseline=f_score(prevalence, 1.0),
+        best_f1=best_f1["f_score"],
+        best_f1_threshold=best_f1["threshold"],
+        best_f1_precision=best_f1["precision"],
+        best_f1_recall=best_f1["recall"],
     )
 
 
@@ -268,16 +341,18 @@ def tune_xgboost(
     n_splits: int = 4,
     use_gpu: bool = False,
     seed: int = 42,
+    metric: str = "auprc",
 ) -> dict[str, Any]:
-    """Optuna search for XGBoost hyperparameters, maximizing patient-level CV AUPRC.
+    """Optuna search for XGBoost hyperparameters, maximizing a patient-level CV score.
 
     Folds are grouped by patient (``GroupKFold`` over ``groups_train``) so no
     patient's windows leak between train and validation — the same leakage guard
-    as the outer split. The objective is **AUPRC** (not AUROC), keeping the search
-    aligned with the rare-event / false-alarm focus of the project. Returns the
-    best hyperparameters as a plain dict, ready to splat into ``train_xgboost`` or
-    ``train`` as overrides. ``use_gpu=True`` runs each trial on CUDA (A6000) and
-    falls back to a CPU search when no GPU is visible.
+    as the outer split. The objective defaults to **AUPRC** (not AUROC), keeping
+    the search aligned with the rare-event / false-alarm focus of the project;
+    ``metric="f1"`` optimizes the best F1 reachable at any threshold instead.
+    Returns the best hyperparameters as a plain dict, ready to splat into
+    ``train_xgboost`` or ``train`` as overrides. ``use_gpu=True`` runs each trial
+    on CUDA (A6000) and falls back to a CPU search when no GPU is visible.
     """
     import optuna
     from sklearn.model_selection import GroupKFold
@@ -286,6 +361,13 @@ def tune_xgboost(
 
     X, y, groups = split.X_train, split.y_train, split.groups_train
     spw = scale_pos_weight(y)
+    if metric not in ("auprc", "f1"):
+        raise ValueError(f"Unknown tuning metric {metric!r}; choose 'auprc' or 'f1'")
+    fold_score = (
+        (lambda truth, proba: float(average_precision_score(truth, proba)))
+        if metric == "auprc"
+        else (lambda truth, proba: best_f_score(truth, proba)["f_score"])
+    )
     device_params = {"device": "cuda", "tree_method": "hist"} if use_gpu else {}
     n_splits = max(2, min(n_splits, int(np.unique(groups).size)))
 
@@ -311,7 +393,7 @@ def tune_xgboost(
             model = XGBClassifier(**params)
             model.fit(X.iloc[train_idx], y[train_idx])
             proba = model.predict_proba(X.iloc[val_idx])[:, 1]
-            fold_scores.append(float(average_precision_score(y[val_idx], proba)))
+            fold_scores.append(fold_score(y[val_idx], proba))
         return float(np.mean(fold_scores))
 
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
@@ -321,8 +403,12 @@ def tune_xgboost(
         if not use_gpu:
             raise
         print(f"[gpu] CUDA unavailable ({exc}); re-running the search on CPU.")
-        return tune_xgboost(split, n_trials=n_trials, n_splits=n_splits, use_gpu=False, seed=seed)
-    print(f"Optuna: best CV AUPRC={study.best_value:.4f} over {len(study.trials)} trials")
+        return tune_xgboost(
+            split, n_trials=n_trials, n_splits=n_splits, use_gpu=False, seed=seed, metric=metric
+        )
+    print(
+        f"Optuna: best CV {metric.upper()}={study.best_value:.4f} over {len(study.trials)} trials"
+    )
     return dict(study.best_params)
 
 
@@ -605,14 +691,34 @@ def _score_result(
     )
 
 
+RANK_METRICS: Final[dict[str, str]] = {
+    "auprc": "auprc",
+    "f1": "best_f1",
+    "roc_auc": "roc_auc",
+    "sens": "sensitivity_at_95_specificity",
+}
+
+
+def rank_key(rank_by: str = "auprc"):
+    """Sort key over :class:`ModelResult` for one of :data:`RANK_METRICS`."""
+    try:
+        attribute = RANK_METRICS[rank_by]
+    except KeyError:
+        raise ValueError(
+            f"Unknown ranking metric {rank_by!r}; choose from {', '.join(RANK_METRICS)}"
+        ) from None
+    return lambda result: getattr(result.metrics, attribute)
+
+
 def compare_models(
     split: PatientSplit,
     models: Sequence[str] | None = None,
     use_gpu: bool = False,
     target_sensitivity: float = 0.90,
     include_news: bool = True,
+    rank_by: str = "auprc",
 ) -> list[ModelResult]:
-    """Train several learners on one split and rank them, best AUPRC first.
+    """Train several learners on one split and rank them, best ``rank_by`` first.
 
     Every model sees identical windows, identical features and the identical
     patient-level split, so any difference is the learner's and nothing else's.
@@ -623,6 +729,11 @@ def compare_models(
     Every arm trains on its registry defaults on purpose: tuning one learner and
     not the others decides the ranking by search budget rather than by model.
     Tune afterwards, on whichever arm wins.
+
+    ``rank_by="f1"`` orders by the best F1 reachable at any threshold rather than
+    by AUPRC. The two disagree when a model is strong only in a narrow slice of
+    the PR curve: AUPRC averages over every operating point, best-F1 rewards the
+    single best one.
     """
     requested = list(models) if models is not None else list(MODEL_NAMES)
     results: list[ModelResult] = []
@@ -645,23 +756,31 @@ def compare_models(
         news_score = compute_news_scores(split.X_test)
         results.append(_score_result("news", "NEWS", split, news_score, target_sensitivity))
 
-    return sorted(results, key=lambda result: result.metrics.auprc, reverse=True)
+    return sorted(results, key=rank_key(rank_by), reverse=True)
 
 
-def print_comparison(results: Sequence[ModelResult], target_sensitivity: float = 0.90) -> None:
+def print_comparison(
+    results: Sequence[ModelResult],
+    target_sensitivity: float = 0.90,
+    rank_by: str = "auprc",
+) -> None:
     """Print the head-to-head table: discrimination, then the cost of equal detection."""
     percent = int(round(100 * target_sensitivity))
     header = (
-        f"{'model':<20}{'AUPRC':>8}{'ROC-AUC':>9}{'sens@95spec':>13}"
-        f"{'alarms/100':>12}{'FA rate':>9}{'lead-h':>8}{'fit(s)':>8}"
+        f"{'model':<20}{'AUPRC':>8}{'bestF1':>8}{'F1@sens':>9}{'ROC-AUC':>9}"
+        f"{'sens@95spec':>13}{'alarms/100':>12}{'FA rate':>9}{'lead-h':>8}{'fit(s)':>8}"
     )
-    print(f"\n=== Model comparison — alarm burden at a matched {percent}% sensitivity ===")
+    print(
+        f"\n=== Model comparison (ranked by {rank_by}) — "
+        f"alarm burden at a matched {percent}% sensitivity ==="
+    )
     print(header)
     print("-" * len(header))
     for result in results:
         metrics = result.metrics
         print(
-            f"{metrics.model_name:<20}{metrics.auprc:>8.4f}{metrics.roc_auc:>9.4f}"
+            f"{metrics.model_name:<20}{metrics.auprc:>8.4f}{metrics.best_f1:>8.4f}"
+            f"{result.alarm_burden.get('f1', 0.0):>9.4f}{metrics.roc_auc:>9.4f}"
             f"{metrics.sensitivity_at_95_specificity:>13.4f}"
             f"{result.alarm_burden.get('alarms_per_100_windows', 0.0):>12.2f}"
             f"{result.alarm_burden.get('false_alarm_rate', 0.0):>9.4f}"
@@ -669,8 +788,9 @@ def print_comparison(results: Sequence[ModelResult], target_sensitivity: float =
             f"{result.fit_seconds:>8.2f}"
         )
     print(
-        "\nalarms/100 and FA rate are read at the threshold that just reaches the "
-        f"{percent}% sensitivity above — lower is better at equal detection."
+        "\nbestF1 is the best F1 reachable at any threshold (model property); F1@sens is "
+        f"the F1 you actually get at the matched {percent}% sensitivity, where alarms/100 "
+        "and FA rate are also read — lower burden is better at equal detection."
     )
 
 
@@ -697,6 +817,17 @@ def _print_metrics(metrics: EarlyWarningMetrics) -> None:
     print(f"  AUPRC: {metrics.auprc:.4f}")
     print(f"  ROC-AUC: {metrics.roc_auc:.4f}")
     print(f"  Sensitivity @ 95% specificity: {metrics.sensitivity_at_95_specificity:.4f}")
+    lift = metrics.best_f1 / metrics.f1_all_alarm_baseline if metrics.f1_all_alarm_baseline else 0.0
+    print(
+        f"  Best F1 (any threshold): {metrics.best_f1:.4f} "
+        f"@ p>={metrics.best_f1_threshold:.4f} "
+        f"(precision {metrics.best_f1_precision:.4f} / recall {metrics.best_f1_recall:.4f})"
+    )
+    print(
+        f"    vs always-alarm F1 {metrics.f1_all_alarm_baseline:.4f} "
+        f"at {100 * metrics.prevalence:.2f}% prevalence — {lift:.1f}x"
+    )
+    print(f"  F1 @ 95% specificity: {metrics.f1_at_threshold:.4f}")
     print(f"  False-alarm rate @ threshold: {metrics.false_alarm_rate:.4f}")
     print(f"  Alarms per 100 windows: {metrics.alarms_per_100_windows:.2f}")
     print(f"  Confusion matrix [ [TN,FP],[FN,TP] ]: {metrics.confusion_matrix}")
@@ -714,6 +845,8 @@ def train(
     compare: bool = False,
     models: Sequence[str] | None = None,
     target_sensitivity: float = 0.90,
+    rank_by: str = "auprc",
+    tune_metric: str = "auprc",
 ) -> dict[str, Any]:
     """Run the full synthetic early-warning pipeline and save the model.
 
@@ -735,7 +868,7 @@ def train(
     split = patient_level_split(windowed, test_size=0.2, seed=seed)
 
     overrides = (
-        tune_xgboost(split, n_trials=n_trials, use_gpu=use_gpu, seed=seed)
+        tune_xgboost(split, n_trials=n_trials, use_gpu=use_gpu, seed=seed, metric=tune_metric)
         if tune
         else {"n_estimators": n_estimators}
     )
@@ -752,6 +885,7 @@ def train(
         "news_baseline": asdict(news_metrics),
         "model_path": str(output_file),
         "tuned": tune,
+        "tuning_metric": tune_metric if tune else None,
         "best_params": overrides if tune else None,
         "note": "Synthetic development data. Real training runs in the 안심존 on KHTH data.",
     }
@@ -768,6 +902,7 @@ def train(
             models=[name for name in requested if not (name == "xgboost" and reuse_xgb)],
             use_gpu=use_gpu,
             target_sensitivity=target_sensitivity,
+            rank_by=rank_by,
         )
         if reuse_xgb:
             xgb_score = model.predict_proba(split.X_test)[:, 1]
@@ -782,9 +917,10 @@ def train(
                     estimator=model,
                 )
             )
-        comparison.sort(key=lambda result: result.metrics.auprc, reverse=True)
+        comparison.sort(key=rank_key(rank_by), reverse=True)
         results["comparison"] = [result.summary() for result in comparison]
         results["matched_sensitivity"] = target_sensitivity
+        results["ranked_by"] = rank_by
 
     (model_path / "vitals_ews_metrics.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
 
@@ -792,7 +928,7 @@ def train(
     print()
     _print_metrics(news_metrics)
     if comparison:
-        _print_comparison(comparison, target_sensitivity)
+        print_comparison(comparison, target_sensitivity, rank_by=rank_by)
     print(f"\nModel saved to: {output_file}")
     return results
 
@@ -803,7 +939,8 @@ def main() -> None:
         python src/vitals_train.py                      # XGBoost vs NEWS
         python src/vitals_train.py --compare            # + LightGBM/CatBoost/RF/Logistic
         python src/vitals_train.py --compare --models logistic,random_forest
-        python src/vitals_train.py --tune --trials 40 --gpu
+        python src/vitals_train.py --compare --rank-by f1     # rank by best-F1
+        python src/vitals_train.py --tune --trials 40 --gpu --tune-metric f1
     """
     import argparse
 
@@ -827,6 +964,18 @@ def main() -> None:
         default=0.90,
         help="matched sensitivity for the alarm-burden column (default: 0.90)",
     )
+    parser.add_argument(
+        "--rank-by",
+        default="auprc",
+        choices=sorted(RANK_METRICS),
+        help="metric the comparison table is sorted by (default: auprc)",
+    )
+    parser.add_argument(
+        "--tune-metric",
+        default="auprc",
+        choices=("auprc", "f1"),
+        help="objective the Optuna search maximizes (default: auprc)",
+    )
     args = parser.parse_args()
 
     selected = [name.strip() for name in args.models.split(",") if name.strip()] if args.models else None
@@ -837,6 +986,8 @@ def main() -> None:
         compare=args.compare or selected is not None,
         models=selected,
         target_sensitivity=args.sens,
+        rank_by=args.rank_by,
+        tune_metric=args.tune_metric,
     )
 
 

@@ -421,6 +421,106 @@ def test_compare_models_skips_missing_packages(trained, monkeypatch):
     assert "logistic" not in {result.name for result in results}
 
 
+# ---------------------------------------------------------------------------
+# F-score metrics
+# ---------------------------------------------------------------------------
+
+
+def test_f_score_matches_sklearn():
+    """f_score reproduces sklearn's fbeta on the same precision/recall pair."""
+    from sklearn.metrics import fbeta_score
+
+    from vitals_train import f_score
+
+    y_true = np.array([0, 0, 1, 1, 0, 1, 0, 0])
+    y_pred = np.array([0, 1, 1, 0, 0, 1, 0, 1])
+    tp = int(((y_true == 1) & (y_pred == 1)).sum())
+    precision = tp / y_pred.sum()
+    recall = tp / y_true.sum()
+    for beta in (1.0, 2.0):
+        assert f_score(precision, recall, beta) == pytest.approx(
+            fbeta_score(y_true, y_pred, beta=beta)
+        )
+
+
+def test_f_score_handles_no_alarms():
+    """A model that never alarms scores 0, not a ZeroDivisionError."""
+    from vitals_train import f_score
+
+    assert f_score(0.0, 0.0) == 0.0
+
+
+def test_best_f_score_finds_the_optimal_threshold(trained):
+    """The swept best-F1 dominates the F1 read at any single fixed threshold."""
+    from sklearn.metrics import f1_score
+
+    from vitals_train import best_f_score
+
+    model, _metrics, split = trained
+    score = model.predict_proba(split.X_test)[:, 1]
+    best = best_f_score(split.y_test, score)
+
+    assert 0.0 <= best["f_score"] <= 1.0
+    # It is the maximum, so no other cutoff may beat it.
+    for cutoff in (0.1, 0.3, 0.5, 0.7, 0.9):
+        assert f1_score(split.y_test, (score >= cutoff).astype(int)) <= best["f_score"] + 1e-9
+    # And the reported threshold really does reproduce the reported score.
+    at_best = f1_score(split.y_test, (score >= best["threshold"]).astype(int))
+    assert at_best == pytest.approx(best["f_score"], abs=1e-9)
+
+
+def test_best_f2_weights_recall_above_f1(trained):
+    """F2 peaks at a lower threshold than F1 — it buys recall with precision."""
+    from vitals_train import best_f_score
+
+    model, _metrics, split = trained
+    score = model.predict_proba(split.X_test)[:, 1]
+    f1, f2 = best_f_score(split.y_test, score, 1.0), best_f_score(split.y_test, score, 2.0)
+    assert f2["recall"] >= f1["recall"]
+
+
+def test_metrics_carry_both_f1_flavours(trained):
+    """evaluate() reports F1 at the operating point and the best F1 anywhere."""
+    _model, metrics, _split = trained
+    assert 0.0 <= metrics.f1_at_threshold <= 1.0
+    # The 95%-specificity point is one cutoff among many, so it cannot beat the best.
+    assert metrics.f1_at_threshold <= metrics.best_f1 + 1e-9
+    # The always-alarm floor is 2p/(1+p); a useful model has to clear it.
+    expected_floor = 2 * metrics.prevalence / (1 + metrics.prevalence)
+    assert metrics.f1_all_alarm_baseline == pytest.approx(expected_floor)
+    assert metrics.best_f1 > metrics.f1_all_alarm_baseline
+
+
+def test_compare_models_can_rank_by_f1(trained):
+    """--rank-by f1 sorts by best-F1; alarm burden gains a matching F1 column."""
+    from vitals_train import compare_models, rank_key
+
+    _model, _metrics, split = trained
+    results = compare_models(
+        split, models=["logistic", "random_forest"], rank_by="f1", target_sensitivity=0.9
+    )
+    scores = [result.metrics.best_f1 for result in results]
+    assert scores == sorted(scores, reverse=True)
+    for result in results:
+        assert 0.0 <= result.alarm_burden["f1"] <= 1.0
+
+    with pytest.raises(ValueError, match="Unknown ranking metric"):
+        rank_key("accuracy")
+
+
+def test_tune_xgboost_accepts_f1_objective(trained):
+    """The Optuna search can maximize best-F1 instead of AUPRC."""
+    from vitals_train import train_xgboost, tune_xgboost
+
+    _model, _metrics, split = trained
+    best = tune_xgboost(split, n_trials=2, n_splits=2, seed=0, metric="f1")
+    _model2, metrics = train_xgboost(split, **best)
+    assert 0.0 <= metrics.best_f1 <= 1.0
+
+    with pytest.raises(ValueError, match="Unknown tuning metric"):
+        tune_xgboost(split, n_trials=1, n_splits=2, metric="accuracy")
+
+
 def test_shap_window_factors(trained):
     """Per-window SHAP returns the requested number of drivers with expected keys."""
     from vitals_explain import window_risk_factors
