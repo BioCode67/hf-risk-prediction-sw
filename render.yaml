@@ -1,12 +1,19 @@
-# Render blueprint for the dashboard API (src/vitals_api.py).
+# Render blueprint for the FastAPI service (src/vitals_api.py).
 #
-# The service loads models/dashboard_challenge2019.pkl and serves it — it never
-# reads the raw Challenge-2019 files, which are not in the repo and would take
-# ~5 minutes and 4 GB to process. Build the artifact locally first (see
-# docs/deploy.md) and commit it, or the service starts with the synthetic cohort.
+# NOT part of deploying the dashboard. web/ bakes the whole cohort analysis into
+# static JSON and serves it from Vercel with no backend at all — see
+# docs/deploy.md §5 for why the two were split apart. Nothing in web/ reads this
+# service any more; the EWS_API_ORIGIN proxy it used to sit behind is gone.
 #
-# The frontend is NOT here: web/ deploys to Vercel, with EWS_API_ORIGIN pointed
-# at this service's URL.
+# Kept because the API is still a working entry point if you want one live (for
+# a different client, or to poke at /api/patients). It loads
+# models/dashboard_challenge2019.pkl and serves it — it never reads the raw
+# Challenge-2019 files, which are not in the repo and would take ~5 minutes and
+# 4 GB to process. Build the artifact locally first (docs/deploy.md §1) and
+# commit it, or the service starts with the synthetic cohort.
+#
+# Memory: steady state is ~461 MB, and both the free and Starter plans cap at
+# 512 MB. It runs, but concurrent requests can OOM it.
 
 services:
   - type: web
