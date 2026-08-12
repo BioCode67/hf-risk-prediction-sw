@@ -160,7 +160,7 @@ export default function Page() {
           </div>
         </div>
 
-        <Footer />
+        <Footer source={overview?.source} />
       </div>
     </div>
   );
@@ -193,18 +193,26 @@ function Header({ overview }: { overview: ReturnType<typeof useDashboard>["overv
   );
 }
 
-function Footer() {
+function Footer({ source }: { source?: string }) {
   return (
     <footer className="text-subtle-foreground border-border space-y-1.5 border-t pt-3 text-xs leading-relaxed">
       <p>
         연구·교육용 데모입니다. 의료기기가 아니며 임상 의사결정에 사용할 수 없습니다. 화면의 근거는 모델의
         기여도 분해이지 진단이 아니고, 처치 권고는 제공하지 않습니다.
       </p>
-      <p>
-        데이터는 공개된 PhysioNet/CinC Challenge 2019이며 대상 사건은 <strong>패혈증 발병</strong>입니다
-        (심정지가 아닙니다). 모델이 학습한 라벨은 &ldquo;악화&rdquo;가 아니라 &ldquo;6시간 내 발병&rdquo;이므로,
-        이미 붕괴 중인 환자에게 낮은 점수가 나올 수 있습니다 — 그 경우 화면 상단에 경고가 표시됩니다.
-      </p>
+      {source === "synthetic" ? (
+        <p>
+          지금 화면의 데이터는 <strong>합성 코호트</strong>입니다 — 실제 환자 기록이 아니라
+          파이프라인 시연용으로 생성된 값이며, 대상 사건은 <strong>병원 내 심정지</strong>입니다.
+          여기의 수치는 성능 근거가 아니라 화면 동작 예시로만 보십시오.
+        </p>
+      ) : (
+        <p>
+          데이터는 공개된 PhysioNet/CinC Challenge 2019이며 대상 사건은 <strong>패혈증 발병</strong>입니다
+          (심정지가 아닙니다). 모델이 학습한 라벨은 &ldquo;악화&rdquo;가 아니라 &ldquo;6시간 내 발병&rdquo;이므로,
+          이미 붕괴 중인 환자에게 낮은 점수가 나올 수 있습니다 — 그 경우 화면 상단에 경고가 표시됩니다.
+        </p>
+      )}
     </footer>
   );
 }
