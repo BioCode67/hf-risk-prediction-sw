@@ -15,7 +15,20 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const MODEL = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
+/**
+ * Which Groq model words the evidence. Override with `GROQ_MODEL`.
+ *
+ * Hosted model names expire. Groq deprecated `llama-3.3-70b-versatile` — the
+ * previous default here — on 2026-06-17 for free and developer tiers, and a
+ * decommissioned name fails at generation time with a 400, long after the UI
+ * has already told the user the feature is available. `openai/gpt-oss-120b` is
+ * Groq's own suggested replacement for it.
+ *
+ * When this stops working, the fix is an env var, not a deploy: set GROQ_MODEL
+ * to a current name from Groq's model list. Keep `DEFAULT_MODEL` in
+ * `src/vitals_narrate.py` in step with whatever lands here.
+ */
+const MODEL = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
 const MAX_EVIDENCE_CHARS = 4000;
 
 const RATE_LIMIT = 10; // requests
@@ -58,8 +71,12 @@ function overRateLimit(client: string, now: number): boolean {
 function wrongOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return true;
+  // Behind Vercel's proxy the public hostname arrives as `x-forwarded-host`
+  // while `host` can be an internal one. Comparing against `host` alone would
+  // reject every real request from the deployed page.
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
   try {
-    return new URL(origin).host !== request.headers.get("host");
+    return new URL(origin).host !== host;
   } catch {
     return true;
   }
@@ -77,9 +94,14 @@ const SYSTEM_PROMPT = `당신은 병동 조기경보 시스템의 설명 생성�
 
 형식: 3문장 이내, 불릿 없이 이어지는 산문. 활력징후를 전부 나열하지 말고 상위 요인과 그와 직접 관련된 값만 언급하십시오. 위험도·NEWS 숫자를 그대로 되읽지 말고, 무엇이 어떻게 변하고 있는지를 먼저 쓰십시오.`;
 
-/** Lets the UI disable the button rather than offer one that always fails. */
+/**
+ * Lets the UI disable the button rather than offer one that always fails, and
+ * report *which* model is configured. The name is worth showing: it is the one
+ * piece of this feature that goes stale on someone else's schedule, and a
+ * screen that names it turns "the button is broken" into "that model is gone".
+ */
 export async function GET() {
-  return NextResponse.json({ available: Boolean(process.env.GROQ_API_KEY) });
+  return NextResponse.json({ available: Boolean(process.env.GROQ_API_KEY), model: MODEL });
 }
 
 export async function POST(request: Request) {
@@ -143,8 +165,19 @@ export async function POST(request: Request) {
   }
 
   if (!response.ok) {
+    // Pass Groq's own wording through. A decommissioned model name is the most
+    // likely failure here and it says so explicitly; swallowing it left the
+    // screen showing a bare "LLM 오류 400" with nothing to act on.
+    const reason = await response
+      .json()
+      .then((body: { error?: { message?: string } }) => body.error?.message)
+      .catch(() => undefined);
     return NextResponse.json(
-      { detail: `LLM 오류 ${response.status}` },
+      {
+        detail: reason
+          ? `LLM 오류 ${response.status} · 모델 "${MODEL}" — ${reason}`
+          : `LLM 오류 ${response.status} · 모델 "${MODEL}"`,
+      },
       { status: response.status === 429 ? 429 : 502 },
     );
   }

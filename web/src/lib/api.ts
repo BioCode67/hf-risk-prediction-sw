@@ -100,8 +100,9 @@ export const api = {
       burden: index.burden,
       normal_band: index.normal_band,
       eda: index.eda,
-      // Resolved by the route handler, which alone knows whether a key is set.
-      llm_available: await hasLlm(signal),
+      // Resolved by the route handler, which alone knows whether a key is set
+      // and which model name it is configured with.
+      ...(await llmInfo(signal)),
     };
   },
 
@@ -151,13 +152,21 @@ export const api = {
   },
 };
 
-let llmCache: Promise<boolean> | null = null;
+type LlmInfo = { llm_available: boolean; llm_model: string | null };
 
-/** Whether the deployment has a Groq key, so the UI can disable the button. */
-function hasLlm(signal?: AbortSignal): Promise<boolean> {
+let llmCache: Promise<LlmInfo> | null = null;
+
+/**
+ * Whether the deployment has a Groq key, and which model it will use — so the
+ * UI can disable the button and name the model it would call.
+ */
+function llmInfo(signal?: AbortSignal): Promise<LlmInfo> {
   llmCache ??= fetch("/api/explain", { method: "GET", signal })
-    .then((response) => (response.ok ? response.json() : { available: false }))
-    .then((body: { available?: boolean }) => Boolean(body.available))
-    .catch(() => false);
+    .then((response) => (response.ok ? response.json() : {}))
+    .then((body: { available?: boolean; model?: string }) => ({
+      llm_available: Boolean(body.available),
+      llm_model: body.model ?? null,
+    }))
+    .catch(() => ({ llm_available: false, llm_model: null }));
   return llmCache;
 }

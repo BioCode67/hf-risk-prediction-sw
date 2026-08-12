@@ -28,6 +28,7 @@ export function SepsisPrediction({
   narrationStatus,
   narrationError,
   llmAvailable,
+  llmModel,
   onExplain,
 }: {
   evidence: Evidence;
@@ -35,6 +36,7 @@ export function SepsisPrediction({
   narrationStatus: LoadStatus;
   narrationError?: string;
   llmAvailable: boolean;
+  llmModel: string | null;
   onExplain: () => void;
 }) {
   const meta = RISK_META[evidence.risk_level];
@@ -138,6 +140,14 @@ export function SepsisPrediction({
           {!llmAvailable && (
             <p className="text-subtle-foreground text-xs">
               GROQ_API_KEY가 없어 비활성화됐습니다. 위 기여 요인만으로도 근거는 완결됩니다.
+            </p>
+          )}
+          {/* Named before the call, not only after it. Hosted model names get
+              retired on the provider's schedule, and when one does the failure
+              is otherwise indistinguishable from "the button is broken". */}
+          {llmAvailable && !narration && llmModel && (
+            <p className="text-subtle-foreground text-[11px] tabular-nums">
+              사용할 모델: {llmModel} · 바꾸려면 <code>GROQ_MODEL</code> 환경변수
             </p>
           )}
           {narrationError && (

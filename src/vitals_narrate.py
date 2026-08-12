@@ -31,7 +31,12 @@ import numpy as np
 import pandas as pd
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+
+# Hosted model names expire. Groq retired ``llama-3.3-70b-versatile`` — what
+# used to be here — on 2026-06-17 for free and developer tiers, so it now fails
+# with a 400 at call time. Kept in step with ``MODEL`` in
+# ``web/src/app/api/explain/route.ts``; change both together.
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 # Cohorts under a data-use agreement that forbids third-party sharing.
 RESTRICTED_SOURCES = frozenset({"mimic", "khth"})

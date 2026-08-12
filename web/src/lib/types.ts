@@ -196,6 +196,8 @@ export interface Overview {
   browsable: number;
   burden: BurdenRow[];
   llm_available: boolean;
+  /** Groq model the narration route is configured with; null when unreachable. */
+  llm_model: string | null;
   /** Per-vital control percentiles, keyed by vital name. */
   normal_band: Record<string, NormalBand>;
   eda: Eda;

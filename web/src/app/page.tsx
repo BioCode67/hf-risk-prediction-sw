@@ -135,6 +135,7 @@ export default function Page() {
                       narrationStatus={status.narration}
                       narrationError={errors.narration}
                       llmAvailable={overview?.llm_available ?? false}
+                      llmModel={overview?.llm_model ?? null}
                       onExplain={explain}
                     />
                   </div>
