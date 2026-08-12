@@ -18,6 +18,53 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
 const MAX_EVIDENCE_CHARS = 4000;
 
+const RATE_LIMIT = 10; // requests
+const RATE_WINDOW_MS = 60_000; // per minute, per client
+
+/**
+ * Per-client request counters.
+ *
+ * Honest about what this is: serverless instances are created, duplicated and
+ * discarded per region, so this Map is per *instance*, not global. A determined
+ * caller spread across instances is not stopped by it. What it does stop is the
+ * ordinary case — one script hammering one endpoint — and it costs nothing.
+ * A deployment where the bill matters wants a shared store (Vercel KV, Upstash)
+ * behind the same check.
+ */
+const hits = new Map<string, { count: number; resetAt: number }>();
+
+function overRateLimit(client: string, now: number): boolean {
+  const entry = hits.get(client);
+  if (!entry || now > entry.resetAt) {
+    hits.set(client, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    // Opportunistic sweep: without it the Map is a slow memory leak on a
+    // long-lived instance, since every distinct client leaves an entry behind.
+    if (hits.size > 1000) {
+      for (const [key, value] of hits) if (now > value.resetAt) hits.delete(key);
+    }
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > RATE_LIMIT;
+}
+
+/**
+ * Same-origin only. The dashboard is the sole intended caller, and browsers
+ * attach `Origin` to every POST, so a missing or foreign one is not this page.
+ * This is not a security boundary — `Origin` is trivially forged outside a
+ * browser — it just stops the endpoint being casually reused as a free LLM
+ * proxy from another site.
+ */
+function wrongOrigin(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  try {
+    return new URL(origin).host !== request.headers.get("host");
+  } catch {
+    return true;
+  }
+}
+
 /** Mirrors SYSTEM_PROMPT in src/vitals_narrate.py — keep the two in step. */
 const SYSTEM_PROMPT = `당신은 병동 조기경보 시스템의 설명 생성기입니다. 모델이 계산한 근거를 임상의료진이 읽을 한국어 문장으로 옮기는 것이 유일한 역할입니다.
 
@@ -36,6 +83,18 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  if (wrongOrigin(request)) {
+    return NextResponse.json({ detail: "이 페이지에서만 호출할 수 있습니다." }, { status: 403 });
+  }
+
+  const client = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  if (overRateLimit(client, Date.now())) {
+    return NextResponse.json(
+      { detail: `요청이 너무 잦습니다. 1분에 ${RATE_LIMIT}회까지만 생성할 수 있습니다.` },
+      { status: 429, headers: { "Retry-After": "60" } },
+    );
+  }
+
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
