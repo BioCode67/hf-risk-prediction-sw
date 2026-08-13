@@ -12,6 +12,9 @@ mimic-demo/
 # Model side-artifacts
 models/*.png
 models/*.json
+# Typeset proposal built by scripts/build_proposal.js. Regenerable from
+# docs/proposal-draft.md plus the figures, so the binary stays out of git.
+models/*.docx
 # Per-run copies kept so one experiment's figures survive the next run, which
 # would otherwise overwrite models/*.png in place. Derived from restricted data,
 # so ignored wholesale like the rest of models/.
