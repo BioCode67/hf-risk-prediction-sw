@@ -235,9 +235,9 @@ children.push(
 
 // ── 목차   (page numbers filled from the rendered PDF — see PAGES below)
 const PAGES = {
-  summary: 3, s1: 4, s13: 4, s2: 5, s3: 7, s4: 8, s5: 9, s52: 10, s53: 11, s6: 12,
-  s7: 15, s71: 15, s72: 16, s73: 19, s74: 21,
-  s8: 22, s81: 22, s9: 24, s95: 25, s96: 25, s10: 27, s11: 28, ref: 29,
+  summary: 3, s1: 4, s13: 4, s2: 5, s3: 6, s4: 7, s5: 8, s52: 9, s53: 10, s6: 11,
+  s7: 14, s71: 14, s72: 15, s73: 18, s74: 20,
+  s8: 21, s81: 21, s9: 23, s95: 24, s96: 24, s10: 26, s11: 27, ref: 28,
 };
 children.push(
   H1("목차"),
@@ -394,7 +394,6 @@ children.push(
     { t: "에서만 의미를 가진다. 본 과제의 모든 알람 부담 비교는 두 점수(본 모델·NEWS)를 각각 조정해 검출률을 일치시킨 뒤 수행한다." },
   ]),
   P("요약하면, 성공의 정의는 “얼마나 잘 맞히는가”가 아니라 “같은 검출률에서 얼마나 적게, 얼마나 일찍, 왜 알리는가”이다."),
-  BREAK(),
 );
 
 // ── 3. 기존 접근
@@ -623,7 +622,7 @@ children.push(
     { align: [undefined, AlignmentType.CENTER, undefined],
       headerAlign: [undefined, AlignmentType.CENTER, undefined] },
   ),
-  P("표 3. 시간 파라미터", { size: 19, bold: true, before: 200, after: 100 }),
+  P("표 1. 시간 파라미터", { size: 19, bold: true, before: 200, after: 100 }),
   TABLE(
     [2600, 1400, 5026],
     ["파라미터", "기본값", "의미"],
@@ -663,7 +662,7 @@ children.push(
   ], "FBF2F2", WARN),
   BULLET("규모: 20,336명 적재 → 환자 단위 분할 train 15,886명 / test 3,972명(126,558 윈도우), 양성률 1.19%"),
   BULLET("설정: 입력 창 과거 8시간, 예측 지평 향후 6시간"),
-  P("표 1. 동일 검출률에서의 알람 부담 (test 3,972명 전수 기준)", { size: 19, bold: true, before: 160, after: 100 }),
+  P("표 2. 동일 검출률에서의 알람 부담 (test 3,972명 전수 기준)", { size: 19, bold: true, before: 160, after: 100 }),
   TABLE(
     [2200, 2400, 2200, 2226],
     ["검출률(민감도)", "본 모델 알람/100", "NEWS 알람/100", "알람 감소"],
