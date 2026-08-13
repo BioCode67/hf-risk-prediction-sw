@@ -327,6 +327,13 @@ children.push(
     { t: "경보 설계", b: true },
     { t: "의 영역에 있다." },
   ]),
+  P([
+    { t: "이는 추상적 우려가 아니라 정량적으로 보고된 문제다. 미국 보건의료연구품질청(AHRQ)의 환자안전 실무 분석에 따르면 중환자실 환자 1명은 간호사 한 교대 동안 평균 " },
+    { t: "150~400건의 알람", b: true },
+    { t: "을 발생시키며, 심전도 모니터 알람의 " },
+    { t: "80~99%가 거짓이거나 임상적으로 무의미", b: true },
+    { t: "한 것으로 보고된다[4]. 미국 병원인증기구(The Joint Commission)는 임상 알람 안전을 국가환자안전목표로 지정하고 있다. 즉 경보의 수를 줄이는 것은 편의의 문제가 아니라 환자안전의 문제다." },
+  ]),
   H2("1.2 지금 필요한 것은 더 높은 정확도가 아니다"),
   P("고령화와 중증환자 증가, 의료 AI의 실사용 요구가 동시에 맞물리는 현 시점에서 필요한 것은 “더 높은 정확도”가 아니라 “임상이 신뢰하고 실제로 사용하는 경보”다. 이는 구체적으로 세 가지 조건으로 분해된다."),
   BULLET([{ t: "적은 오경보 ", b: true }, { t: "— 같은 검출 수준을 유지하면서 알람 횟수를 줄일 것" }]),
@@ -384,7 +391,12 @@ children.push(
     ],
   ),
   H2("3.1 선행 사례를 먼저 짚는다"),
-  P("국내에는 이미 일반병동 입원환자의 심정지 위험을 감시하는 AI 의료기기가 상용화되어 있다. VUNO Med-DeepCARS는 혈압·맥박·호흡수·체온 4종의 활력징후를 이용해 24시간 내 심정지 발생을 예측하며, 다기관 후향 연구(173,368명)에서 AUROC 내부 코호트 0.860, 외부 코호트 0.905를 보고하였다. 식약처 허가를 받았고 미국 FDA 혁신의료기기로 지정되었으며, 2025 AHA CPR·ECC 가이드라인에 근거 문헌으로 인용되었다."),
+  P("국내에는 이미 일반병동 입원환자의 심정지 위험을 감시하는 AI 의료기기가 상용화되어 있다. VUNO Med-DeepCARS는 혈압·맥박·호흡수·체온 4종의 활력징후를 이용해 심정지 발생을 예측하며, 식약처 허가를 받았고 미국 FDA 혁신의료기기로 지정되었다."),
+  P([
+    { t: "이 제품의 근거 연구는 잘 정립되어 있다. 기반 알고리즘은 2개 병원 52,131명을 대상으로 한 후향 코호트에서 개발되어 기존 조기경보점수 대비 우월성이 보고되었고[2], 이후 국내 4개 수련병원에서 " },
+    { t: "전향적 다기관 검증", b: true },
+    { t: "이 수행되어 일반병동 환자의 심정지 및 비계획적 중환자실 이송 예측 성능이 확인되었다[3]. 즉 본 과제가 다루는 문제는 이미 임상적·규제적으로 타당성이 입증된 영역이다." },
+  ]),
   CALLOUT([
     { t: "이 사실은 본 제안의 전제를 약화시키지 않는다. 오히려 강화한다. ", b: true },
     { t: "“활력징후로 심정지를 예측할 수 있는가”는 이미 임상적·규제적으로 입증된 질문이다. 따라서 본 과제가 답해야 할 질문은 그것이 아니라, " },
@@ -394,7 +406,7 @@ children.push(
   H2("3.2 남아 있는 세 가지 간극"),
   NUM(1, [
     { t: "평가 축의 전환. ", b: true },
-    { t: "공개된 성능 보고는 AUROC 중심이며, 동일 검출률에서 알람이 몇 번 울리는가는 공개되지 않는다. 그러나 병동이 실제로 감당하는 것은 알람의 개수다. 본 연구에서도 이 격차를 직접 관찰하였다 — 제7-2장에서 ROC-AUC는 양쪽 모두 약 0.99로 사실상 동일한데 AUPRC는 크게 벌어진다." },
+    { t: "선행 연구의 성능 보고는 AUROC 중심이며, 동일 검출률에서 알람이 몇 번 울리는가는 공개되지 않는다. 그러나 병동이 실제로 감당하는 것은 알람의 개수다. 극단적으로 불균형한 데이터에서 ROC 곡선이 분류기의 신뢰도를 오도할 수 있다는 것은 방법론 문헌에서 명확히 지적된 바이며, 이 경우 정밀도–재현율 평면이 더 정확한 정보를 제공한다[5]. 본 연구에서도 같은 격차를 직접 관찰하였다 — 제7-2장에서 ROC-AUC는 양쪽 모두 약 0.99로 사실상 동일한데 AUPRC는 크게 벌어진다." },
   ]),
   NUM(2, [
     { t: "경보 단위의 근거 제시. ", b: true },
@@ -443,7 +455,6 @@ children.push(
     { t: "한 문장 차별점. ", b: true },
     { t: "정확도 경쟁을 우회하고, 개인화·설명·오경보라는 임상 도입의 실제 장벽을 푼다.", b: true },
   ]),
-  BREAK(),
 );
 
 // ── 5. 데이터 활용
@@ -852,16 +863,39 @@ children.push(
 // ── 참고문헌
 children.push(
   H1("참고문헌"),
-  P("Royal College of Physicians. National Early Warning Score (NEWS) 2: Standardising the assessment of acute-illness severity in the NHS. London: RCP, 2017.", { after: 120 }),
-  P("Lundberg SM, Lee SI. A Unified Approach to Interpreting Model Predictions. Advances in Neural Information Processing Systems (NeurIPS), 2017.", { after: 120 }),
-  P("Chen T, Guestrin C. XGBoost: A Scalable Tree Boosting System. Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining (KDD), 2016.", { after: 120 }),
-  P("Grinsztajn L, Oyallon E, Varoquaux G. Why do tree-based models still outperform deep learning on typical tabular data? Advances in Neural Information Processing Systems (NeurIPS) Datasets and Benchmarks Track, 2022.", { after: 120 }),
-  P("Johnson AEW, Bulgarelli L, Shen L, et al. MIMIC-IV, a freely accessible electronic health record dataset. Scientific Data, 2023.", { after: 120 }),
-  P("Reyna MA, Josef CS, Jeter R, et al. Early Prediction of Sepsis From Clinical Data: The PhysioNet/Computing in Cardiology Challenge 2019. Critical Care Medicine, 2020.", { after: 120 }),
-  P("VUNO Inc. VUNO Med-DeepCARS 제품 정보 및 임상 근거. https://www.vuno.co/deepcars (접속일: 2026-08).", { after: 120 }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[1] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Royal College of Physicians. National Early Warning Score (NEWS) 2: Standardising the assessment of acute-illness severity in the NHS. London: RCP, 2017.", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[2] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Kwon JM, Lee Y, Lee Y, et al. An Algorithm Based on Deep Learning for Predicting In-Hospital Cardiac Arrest. Journal of the American Heart Association. 2018;7(13):e008678. doi:10.1161/JAHA.118.008678", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[3] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Cho KJ, Kim JS, Lee DH, et al. Prospective, multicenter validation of the deep learning-based cardiac arrest risk management system for predicting in-hospital cardiac arrest or unplanned intensive care unit transfer in patients admitted to general wards. Critical Care. 2023;27(1):346. doi:10.1186/s13054-023-04609-0", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[4] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Agency for Healthcare Research and Quality. Alarm Fatigue. In: Making Healthcare Safer III: A Critical Analysis of Existing and Emerging Patient Safety Practices. Rockville, MD: AHRQ, 2020.", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[5] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Saito T, Rehmsmeier M. The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets. PLOS ONE. 2015;10(3):e0118432. doi:10.1371/journal.pone.0118432", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[6] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Lundberg SM, Lee SI. A Unified Approach to Interpreting Model Predictions. Advances in Neural Information Processing Systems (NeurIPS), 2017.", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[7] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Chen T, Guestrin C. XGBoost: A Scalable Tree Boosting System. Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining (KDD), 2016.", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[8] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Grinsztajn L, Oyallon E, Varoquaux G. Why do tree-based models still outperform deep learning on typical tabular data? Advances in Neural Information Processing Systems (NeurIPS) Datasets and Benchmarks Track, 2022.", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[9] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Johnson AEW, Bulgarelli L, Shen L, et al. MIMIC-IV, a freely accessible electronic health record dataset. Scientific Data. 2023;10:1.", size: 19, color: INK, font: FONT }) ] }),
+  new Paragraph({ spacing: { after: 130, line: 280 }, indent: { left: 460, hanging: 460 },
+    children: [ new TextRun({ text: "[10] ", bold: true, size: 19, color: ACCENT, font: FONT }),
+                new TextRun({ text: "Reyna MA, Josef CS, Jeter R, et al. Early Prediction of Sepsis From Clinical Data: The PhysioNet/Computing in Cardiology Challenge 2019. Critical Care Medicine. 2020;48(2):210-217.", size: 19, color: INK, font: FONT }) ] }),
   CALLOUT([
     { t: "〔제출 전 확인〕 ", b: true, c: WARN },
-    { t: "상용 솔루션의 인허가 현황·성능 지표는 제출 시점 기준으로 재확인하여 표기한다. 또한 원내 심정지 조기경보 및 alarm fatigue 관련 임상 문헌 2~3편을 추가하여 제1장의 근거를 보강한다." },
+    { t: "상용 솔루션의 인허가 현황은 제품 표시·허가 정보가 갱신될 수 있으므로 제출 시점 기준으로 재확인하여 표기한다." },
   ], "FBF2F2", WARN),
 );
 
