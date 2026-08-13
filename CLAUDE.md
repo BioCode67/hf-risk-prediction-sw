@@ -179,17 +179,28 @@ uvicorn main:app --app-dir legacy --reload   # serve API; docs at /docs
 - Commits: Conventional Commits (`feat(...)`, `fix(...)`, `ci:`, `docs:`,
   `chore:`). End commit messages with the `Co-Authored-By` trailer already in use.
 
-## Status (as of 2026-07-28)
+## Status (as of 2026-08-13)
 
-- Static heart-failure track: complete and archived in `legacy/`. Kept for
-  the FastAPI server and the OMOP CDM converter; not part of the competition
-  entry. Do not add new work there.
-- Time-series early-warning track (the K-Health competition entry, branch
-  `claude/cardiac-arrest-early-warning-07fq9e`): full pipeline on synthetic /
-  MIMIC-IV / KHTH — sanitation, sliding windows, personalized-baseline + age/sex
-  features, XGBoost vs NEWS with AUPRC / sensitivity@specificity / alarm burden
-  at matched sensitivity / lead-time, SHAP, a figure set (`vitals_report`)
-  and cardiac-arrest phenotype clustering (`vitals_phenotype`). `mimic_explore
-  --model` runs the whole thing on real MIMIC-IV in one command (arrest =
-  procedureevents 225466). 40 tests pass. Docs: `competition-strategy.md`,
-  `proposal-draft.md`. Remaining gate: full MIMIC-IV (CITI) for real positives.
+**Only one track is active: the K-Health competition entry.** Read
+`docs/STATUS.md` first — it carries the current facts and the to-do list.
+
+- **K-Health competition (active).** 경북대 vitals → in-hospital cardiac arrest.
+  Team PRODROME (전조), single member, registered. Preliminary proposal due
+  2026-08-14 16:00; `docs/proposal-draft.md` is the working draft. The 안심존
+  visit is done (+5 points). PhysioNet CITI is approved, so full MIMIC-IV is now
+  reachable and `mimic_explore --model` can produce real cardiac-arrest numbers
+  (arrest = procedureevents 225466) to replace the synthetic ones in §7-2.
+  Closed-network rules, confirmed with the operator: data, trained models and
+  weight files may all be carried in once approved; results leave the zone but
+  models are assumed not to. MIMIC-IV's DUA means the trained model goes in, never
+  the source records.
+- **KMEDIhub intern track (closed).** Challenge-2019 → sepsis. The dashboard is
+  built, deployed and documented; the deck is delivered. **Do not open new work
+  here** — `web/`, `docs/sepsis-dashboard.md`, `docs/intern-track-briefing.md` and
+  `docs/deploy.md` are finished artifacts. Its validation result is cited in the
+  proposal as feasibility evidence (§7-1) and nothing more.
+- **Static heart-failure track (archived).** In `legacy/`, kept for the FastAPI
+  server and the OMOP CDM converter. Not part of the entry. Do not add work there.
+
+84 tests (71 pass, 13 skip without data). Docs: `competition-strategy.md`,
+`proposal-draft.md`, `differentiation.md`.
