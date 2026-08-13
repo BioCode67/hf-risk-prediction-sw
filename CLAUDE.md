@@ -127,7 +127,8 @@ python src/sepsis_explore.py <dir> --horizon=6    # real Challenge-2019 data (se
 python src/mortality_explore.py <dir> --horizon=6 # real Challenge-2012 data (ICU mortality)
 python src/mimic_explore.py <dir> --model --gpu  # real MIMIC-IV
 
-pytest -q                       # test suite (80 pass, 11 skip on a fresh clone)
+python -m pytest -q             # 88 tests: 76 pass, 12 skip without data
+                                # (a bare `pytest` may be a uv tool without numpy)
 
 # dashboard — two processes
 uvicorn vitals_api:app --app-dir src --reload           # API on :8000 (synthetic)
