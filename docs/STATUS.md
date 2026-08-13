@@ -119,7 +119,9 @@
   - vitals_api.py      : 대시보드용 FastAPI. 사전계산 아티팩트를 읽어 0.1초에 기동
 - 대시보드(web/): Next.js. 근거를 전부 미리 계산해 정적 JSON으로 굽기 때문에 배포에는
   파이썬도 ML 라이브러리도 필요 없음(706MB → 0). scripts/export_dashboard.py로 생성
-- 품질: 테스트 76개 green, CI(3.11/3.12) 반영, 전부 합성/네트워크 불필요로 항상 실행
+- 품질: 테스트 88개 (76 pass / 12 skip — 데이터 의존분만 skip), CI(3.11/3.12) 반영.
+  합성 데이터를 내장해 데이터 없이도 실행됨
+  주의: `pytest` 실행 파일이 uv 격리 환경일 수 있음 → `python -m pytest` 사용
 - 원커맨드: python src/mimic_explore.py <MIMIC경로> --model [--gpu] [--tune] [--trials=N]
   → (Optuna 튜닝) + 지표 + 알람부담 + lead-time + 그림 5종 + 표현형 일괄 생성
 - 협업: 선생님(로컬)이 GPU/CUDA·Optuna·UTF-8 CLI 커밋 → 원커맨드에 통합 완료

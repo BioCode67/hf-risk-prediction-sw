@@ -202,5 +202,5 @@ uvicorn main:app --app-dir legacy --reload   # serve API; docs at /docs
 - **Static heart-failure track (archived).** In `legacy/`, kept for the FastAPI
   server and the OMOP CDM converter. Not part of the entry. Do not add work there.
 
-84 tests (71 pass, 13 skip without data). Docs: `competition-strategy.md`,
+88 tests (76 pass, 12 skip without data — the skips are the data-dependent ones). Docs: `competition-strategy.md`,
 `proposal-draft.md`, `differentiation.md`.
