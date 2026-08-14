@@ -25,7 +25,11 @@ const fs = require("fs");
 const REPO = require("path").resolve(__dirname, "..");
 const OUT = process.env.PROPOSAL_OUT ?? `${REPO}/models/PRODROME_제안서.docx`;
 
-const FONT = "맑은 고딕";
+// Word on Windows has 맑은 고딕; Linux does not, and LibreOffice falls back to a
+// Chinese face when exporting the PDF. Set PROPOSAL_FONT=NanumGothic to build the
+// variant used for the PDF so Korean renders in a Korean face.
+const FONT = process.env.PROPOSAL_FONT || "맑은 고딕";
+const OUT_SUFFIX = process.env.PROPOSAL_OUT_SUFFIX || "";
 const INK = "1A1A1A", MUTED = "555555", ACCENT = "1F4E79", WARN = "9C2B2B";
 const CONTENT_W = 9026;               // A4 width 11906 - 2*1440 margins
 
@@ -239,6 +243,13 @@ const PAGES = {
   s7: 14, s71: 14, s72: 15, s73: 18, s74: 20,
   s8: 21, s81: 21, s9: 23, s95: 24, s96: 24, s10: 26, s11: 27, ref: 28,
 };
+
+// Font metrics move the odd section across a page boundary, so the PDF build and
+// the Word build can disagree by a page. Each artifact gets a TOC that matches
+// itself: PROPOSAL_PAGES='{"s53":9}' node scripts/build_proposal.js
+if (process.env.PROPOSAL_PAGES) {
+  Object.assign(PAGES, JSON.parse(process.env.PROPOSAL_PAGES));
+}
 children.push(
   H1("목차"),
   GAP(160),
