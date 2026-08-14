@@ -137,7 +137,12 @@
 - docs/deploy.md               : 대시보드 배포 절차(아티팩트 → Vercel)
 - web/README.md                : 대시보드 구조·실행
 - docs/STATUS.md               : (본 문서) 프로젝트 현황 정리
-- scripts/build_proposal.js    : 예선 제출본 생성 → models/PRODROME_제안서.docx (28장)
+- scripts/build_proposal.js    : 예선 제출본 생성. 두 벌을 빌드합니다
+    · Word 편집용: `node scripts/build_proposal.js` → models/PRODROME_제안서.docx
+    · 제출 PDF용 : `PROPOSAL_FONT=NanumGothic PROPOSAL_OUT=models/_pdfsrc.docx node scripts/build_proposal.js`
+      (맑은 고딕이 없는 환경에서 LibreOffice가 한글을 중국어 폰트로 치환하는 것을 피합니다)
+    · 폰트가 바뀌면 페이지가 밀리므로 목차는 `PROPOSAL_PAGES='{"키":쪽}'` 로 빌드별 지정
+- scripts/make_pipeline_figure.py / make_ward_figure.py : 파이프라인 개념도 · 병동 알람 그래프
 - scripts/make_baseline_figure.py / make_labeling_figure.py : 개념도 2종
 - scripts/ablate_personalized.py : 개인화 피처 통제 실험 (--mimic / --challenge2019 지원)
 
@@ -145,8 +150,8 @@
 
 ### 예선 마감 전 — 2026-08-14 16:00
 
-제안서는 **28장으로 완성**되어 있습니다(`models/PRODROME_제안서.docx`, 빌드:
-`node scripts/build_proposal.js`). 남은 것은 확인과 제출뿐입니다.
+제안서는 **완성**되어 있습니다 — 제출 PDF 29장, Word 편집본 30장(제한 30장 이내).
+빌드 방법은 §7 참조. 남은 것은 제출뿐입니다.
 
 - [x] **제출 양식 확인** — 지정 양식 없음. 규칙상 요건은 "PDF · 30장 이내"뿐
 - [ ] **팀장 계정으로 PDF 제출** — 마감 16:00 (23:59 아님). 오전 중 제출 권장
@@ -161,7 +166,7 @@
 
 ### 예선 이후 — 우선순위 순
 
-- [ ] **MIMIC-IV 심정지 실학습** — CITI 승인 완료, KOREN AI Cloud(Cheetah) 접속 확보.
+- [ ] **MIMIC-IV 심정지 실학습** — 자격 심사 통과, KOREN AI Cloud(Cheetah) 접속 확보.
       `python src/mimic_explore.py <경로>/icu --arrest-counts` 로 표본 확인 후
       `--model --gpu`. 결과가 나오면 §7-2의 합성 수치를 실측치로 교체
 - [ ] **사건 유형별 개인화 유효성 비교** — `scripts/ablate_personalized.py` 를
