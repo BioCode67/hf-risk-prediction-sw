@@ -372,7 +372,14 @@ def save_artifact(
     metrics: EarlyWarningMetrics,
     output_path: Path,
 ) -> None:
-    """Persist the trained model plus everything needed to score new windows."""
+    """Persist the trained model plus everything needed to score new windows.
+
+    Two formats are written. The pickle is what the rest of this repo loads.
+    The JSON pair exists for the 안심존: the carry-in declaration promises a
+    reviewable text-format model (no pickle deserialization), so the booster
+    goes out via XGBoost's own ``save_model`` and the preprocessing state as
+    plain JSON alongside it.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     artifact = {
         "model": model,
@@ -382,6 +389,15 @@ def save_artifact(
     }
     with output_path.open("wb") as handle:
         pickle.dump(artifact, handle)
+
+    model.get_booster().save_model(str(output_path.with_suffix(".json")))
+    config = {
+        "feature_names": split.feature_names,
+        "imputation_medians": {k: float(v) for k, v in split.imputation_medians.items()},
+        "metrics": asdict(metrics),
+    }
+    config_path = output_path.with_name(output_path.stem + "_config.json")
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 def _print_metrics(metrics: EarlyWarningMetrics) -> None:
