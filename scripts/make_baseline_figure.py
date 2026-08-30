@@ -11,6 +11,7 @@ install fonts-nanum if the fallback warning appears.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -33,13 +34,11 @@ WARD_THRESHOLD = 20.0  # ward-wide respiratory-rate cutoff, breaths/min
 
 
 def _korean_font() -> str:
-    """Pick an installed Korean face, or fall back to the default."""
-    available = {f.name for f in fm.fontManager.ttflist}
-    for name in ("NanumGothic", "NanumBarunGothic", "Malgun Gothic", "AppleGothic"):
-        if name in available:
-            return name
-    print("WARNING: no Korean font found — labels will render as boxes.")
-    return plt.rcParams["font.family"][0]
+    """Delegate to the shared resolver, which registers the bundled TTFs."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from plot_fonts import ensure_korean_font
+
+    return ensure_korean_font()
 
 
 def _patient_series(baseline: float, final: float, seed: int) -> np.ndarray:
