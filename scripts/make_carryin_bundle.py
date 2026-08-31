@@ -35,11 +35,13 @@ ZIP_PATH = DIST / "PRODROME_carryin_code.zip"
 # Declared "약 1MB 이내" — fail loudly before the declaration becomes false.
 MAX_ZIP_BYTES = int(1.2 * 1024 * 1024)
 
-# The torch benchmark is not part of the declaration (torch is not in the
-# package list), and these scripts either call the network or build the
-# proposal, which stays outside.
-SRC_EXCLUDE = {"utils.py", "dataset.py", "model.py"}
-TEST_EXCLUDE = {"test_torch.py"}
+# torch 2.13.0 is in the declared package list, so the DL benchmark arm
+# (src/utils|dataset|model.py, train_dl.py, tests/test_torch.py) ships too —
+# its tests importorskip torch, so the bundle stays green either way.
+# Excluded scripts either call the network or build the proposal, which
+# stays outside the zone.
+SRC_EXCLUDE: set[str] = set()
+TEST_EXCLUDE: set[str] = set()
 SCRIPTS_INCLUDE = {"ablate_personalized.py"}
 
 NARRATE_STUB = '''
@@ -114,7 +116,7 @@ def stage() -> None:
     for name in sorted(SCRIPTS_INCLUDE):
         shutil.copy(ROOT / "scripts" / name, STAGING / "scripts" / name)
 
-    for name in ("conftest.py", "requirements.txt", "README.md"):
+    for name in ("conftest.py", "requirements.txt", "requirements-torch.txt", "README.md", "train_dl.py"):
         shutil.copy(ROOT / name, STAGING / name)
 
     shutil.copy(ROOT / "assets" / "fonts" / "LICENSE-OFL.txt", STAGING / "assets" / "fonts" / "LICENSE-OFL.txt")
@@ -136,8 +138,10 @@ def stage() -> None:
         "```\n\n"
         "## 구성\n\n"
         "- `src/` — 시계열 조기경보 파이프라인 (numpy·pandas·scikit-learn·xgboost·shap·matplotlib)\n"
-        "- `tests/` + `conftest.py` — 자동화 테스트 (데이터 의존 테스트는 자동 skip)\n"
+        "- `tests/` + `conftest.py` — 자동화 테스트 (데이터·torch 의존 테스트는 자동 skip)\n"
         "- `scripts/ablate_personalized.py` — 개인화 피처 통제 실험 (다중 시드)\n"
+        "- `train_dl.py` + `src/utils|dataset|model.py` — 딥러닝(LSTM/GRU) 비교 실험\n"
+        "  (사전 신고한 torch 2.13.0, CPU 모드 — `python train_dl.py`가 더미 데이터 자가검증)\n"
         "- `assets/fonts/` — 나눔고딕 TTF는 별도 매체로 반입하여 이 폴더에 배치\n"
         "- 사전학습 모델(XGBoost JSON + config JSON)은 별도 반입 —\n"
         "  `vitals_train.load_artifact(\"<모델>.json\")` 으로 적재\n",
