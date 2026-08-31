@@ -165,8 +165,13 @@
 
 ### 지금 즉시 — 8/31(월) 10:00 마감 ⚠️
 - [ ] **분석환경 사전신청 회신** — dacon@dacon.io + 602626@kyuh.ac.kr 둘 다.
-      Python 3.11 + 패키지 138종(버전 고정, 이 컨테이너의 테스트 green 구성과 동일)
+      Python 3.11 + 패키지 141종(버전 고정, 이 컨테이너의 테스트 green 구성과 동일)
       + 사전학습 모델(XGBoost JSON) + 코드·나눔고딕 폰트 반입 선언. GPU 불필요
+
+**반입 준비 자동화 (완료):** `python scripts/make_carryin_bundle.py` 가 선언 그대로의
+코드 스냅샷 ZIP을 생성 — narrate LLM부 제거(DUA 가드는 유지), 폰트는 별도 반입,
+스테이징 사본 안에서 전체 테스트를 돌려 자가검증 후 압축(89KB < 선언 1MB).
+결과보고서용 그림(vitals_report·vitals_phenotype)은 전부 한글 라벨 + 번들 폰트로 전환.
 
 **완료된 것:** §3 상용 제품(VUNO Med-DeepCARS) 실명·근거 논문 반영 · 참고문헌 10건
 실재 확인 · §7-1 실측치 교체 · 개념도 2종(개인 기저선·within-patient) 작성 ·

@@ -69,25 +69,35 @@ def cluster_phenotypes(signatures: pd.DataFrame, k: int = 3, seed: int = 42) -> 
 
 
 def plot_phenotypes(centroids: pd.DataFrame, sizes: pd.Series, output_path: str | Path) -> Path:
-    """Heatmap of each phenotype's mean vital change (rows = clusters)."""
+    """Heatmap of each phenotype's mean vital change (rows = clusters).
+
+    Korean labels: this figure goes into the 본선 결과보고서, and the bundled
+    font makes it render inside the closed zone.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    from plot_fonts import ensure_korean_font
+    from vitals_narrate import VITAL_KO
+
+    plt.rcParams["font.family"] = ensure_korean_font()
+    plt.rcParams["axes.unicode_minus"] = False
 
     data = centroids.to_numpy()
     limit = float(np.max(np.abs(data))) or 1.0
     fig, ax = plt.subplots(figsize=(8, 1.4 + 0.7 * len(centroids)))
     im = ax.imshow(data, cmap="RdBu_r", vmin=-limit, vmax=limit, aspect="auto")
     ax.set_xticks(range(len(VITALS)))
-    ax.set_xticklabels(list(VITALS), rotation=30, ha="right")
+    ax.set_xticklabels([VITAL_KO[v][0] for v in VITALS], rotation=30, ha="right")
     ax.set_yticks(range(len(centroids)))
-    ax.set_yticklabels([f"phenotype {c} (n={int(sizes.get(c, 0))})" for c in centroids.index])
+    ax.set_yticklabels([f"표현형 {c} (n={int(sizes.get(c, 0))})" for c in centroids.index])
     for i in range(data.shape[0]):
         for j in range(data.shape[1]):
             ax.text(j, i, f"{data[i, j]:+.1f}", ha="center", va="center", fontsize=8)
-    ax.set_title("Cardiac-arrest phenotypes: mean vital change before arrest")
-    fig.colorbar(im, ax=ax, label="change vs personal baseline")
+    ax.set_title("심정지 표현형별 발생 전 활력징후 평균 변화")
+    fig.colorbar(im, ax=ax, label="개인 기저선 대비 변화")
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
