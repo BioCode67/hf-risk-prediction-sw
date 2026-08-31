@@ -378,6 +378,47 @@ def test_artifact_json_round_trip(trained, tmp_path):
     np.testing.assert_allclose(reloaded, original, rtol=1e-6, atol=1e-7)
 
 
+def test_fine_tune_from_json_artifact(trained, tmp_path):
+    """The declared zone workflow: carried-in JSON model + new data → warm start."""
+    from vitals_data import build_windows, generate_synthetic_cohort, patient_level_split
+    from vitals_train import fine_tune_xgboost, load_artifact, save_artifact
+
+    model, metrics, split = trained
+    artifact_path = tmp_path / "vitals_ews_model.pkl"
+    save_artifact(model, split, metrics, artifact_path)
+    artifact = load_artifact(artifact_path.with_suffix(".json"))
+
+    # A different cohort stands in for the zone's KHTH data.
+    new_split = patient_level_split(build_windows(generate_synthetic_cohort(n_patients=150, seed=11)))
+    tuned, tuned_metrics = fine_tune_xgboost(artifact, new_split, n_estimators=40)
+
+    base_trees = artifact["model"].get_booster().num_boosted_rounds()
+    assert tuned.get_booster().num_boosted_rounds() == base_trees + 40
+    assert 0.0 <= tuned_metrics.auprc <= 1.0
+    assert tuned_metrics.roc_auc > 0.7  # still an early-warning model after refinement
+
+
+def test_fine_tune_rejects_mismatched_features(trained, tmp_path):
+    """Fine-tuning on windows built with a different feature pipeline must fail loudly."""
+    from vitals_data import (
+        add_personalized_features,
+        build_windows,
+        generate_synthetic_cohort,
+        patient_level_split,
+    )
+    from vitals_train import fine_tune_xgboost, save_artifact, load_artifact
+
+    model, metrics, split = trained
+    artifact_path = tmp_path / "vitals_ews_model.pkl"
+    save_artifact(model, split, metrics, artifact_path)
+    artifact = load_artifact(artifact_path.with_suffix(".json"))
+
+    cohort = generate_synthetic_cohort(n_patients=80, seed=5)
+    other = patient_level_split(add_personalized_features(build_windows(cohort), cohort))
+    with pytest.raises(ValueError, match="feature columns"):
+        fine_tune_xgboost(artifact, other)
+
+
 def test_artifact_pickle_round_trip(trained, tmp_path):
     """The in-repo path keeps working: the pickle reloads through load_artifact."""
     from vitals_train import load_artifact, save_artifact

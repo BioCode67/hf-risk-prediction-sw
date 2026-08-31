@@ -262,6 +262,52 @@ def train_xgboost(
     return model, evaluate("XGBoost", split.y_test, y_score)
 
 
+def fine_tune_xgboost(
+    artifact: dict[str, Any],
+    split: PatientSplit,
+    n_estimators: int = 150,
+    use_gpu: bool = False,
+    **overrides: Any,
+) -> tuple[XGBClassifier, EarlyWarningMetrics]:
+    """Continue training a loaded artifact's model on new data (warm start).
+
+    This is the declared 안심존 workflow: the MIMIC-pretrained model enters as
+    a booster JSON (see :func:`load_artifact`) and is then refined on KHTH
+    windows. ``n_estimators`` counts the *additional* trees grown on top of
+    the carried-in booster. The new data must carry the same feature columns
+    the artifact was trained on — mismatches raise instead of mis-scoring.
+    """
+    expected = list(artifact.get("feature_names") or [])
+    if expected and list(split.feature_names) != expected:
+        raise ValueError(
+            "feature columns of the new split do not match the artifact "
+            f"({len(split.feature_names)} vs {len(expected)}); rebuild windows "
+            "with the same pipeline the pretrained model used"
+        )
+
+    params: dict[str, Any] = {
+        "objective": "binary:logistic",
+        "eval_metric": "aucpr",
+        "random_state": 42,
+        "scale_pos_weight": scale_pos_weight(split.y_train),
+        "n_estimators": n_estimators,
+        "learning_rate": 0.05,
+        "max_depth": 5,
+        "min_child_weight": 2,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "verbosity": 0,
+    }
+    if use_gpu:
+        params.update({"device": "cuda", "tree_method": "hist"})
+    params.update(overrides)
+
+    model = XGBClassifier(**params)
+    model.fit(split.X_train, split.y_train, xgb_model=artifact["model"].get_booster())
+    y_score = model.predict_proba(split.X_test)[:, 1]
+    return model, evaluate("XGBoost (fine-tuned)", split.y_test, y_score)
+
+
 def tune_xgboost(
     split: PatientSplit,
     n_trials: int = 30,

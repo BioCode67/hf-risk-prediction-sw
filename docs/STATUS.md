@@ -189,8 +189,9 @@
       `--arrest-counts` 로 표본 확인 → `--model --gpu`. 저장은 자동:
       `models/vitals_ews_model_mimic.json` + `_config.json` (사전신청서에 선언한
       XGBoost JSON 포맷 — pickle 아님). 안심존에서는 이 JSON을
-      `vitals_train.load_artifact("....json")` 으로 읽어 추가 학습·보정
-      (booster JSON + config 로더 구현·round-trip 테스트 완료)
+      `vitals_train.load_artifact("....json")` 으로 읽고
+      `fine_tune_xgboost(artifact, split)` 로 KHTH 데이터에 이어서 학습
+      (warm start — 로더·이어학습·피처 불일치 가드 모두 테스트 완료)
 - [ ] **사건 유형별 개인화 유효성 비교** — `scripts/ablate_personalized.py` 를
       `--mimic`(심정지)과 `--challenge2019`(패혈증) 양쪽에 돌려 비교.
       "개인 기저선 이탈이 어떤 사건에서 유효한가"는 §9-5의 3번 검증 항목이자
