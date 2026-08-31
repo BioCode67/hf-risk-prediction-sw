@@ -1,4 +1,4 @@
-"""Train/verify the LSTM/GRU vital-sign early-warning baseline (deep-learning track).
+"""Train/verify the LSTM/GRU/Transformer vital-sign early-warning baseline (DL track).
 
 Runs on **dummy** variable-length sequences by default so the whole PyTorch
 pipeline (preprocess → pad/mask Dataset → RNN → BCE) is verified end-to-end with
@@ -7,8 +7,9 @@ no data. Point ``--data-dir`` at a folder of per-patient CSV/Parquet/PSV files
 path changes.
 
     python train_dl.py                                  # dummy smoke test
-    python train_dl.py --rnn gru --epochs 15 --device cuda
-    python train_dl.py --data-dir /path/to/patients --rnn lstm
+    python train_dl.py --arch gru --epochs 15 --device cuda
+    python train_dl.py --arch transformer --epochs 15
+    python train_dl.py --data-dir /path/to/patients --arch lstm
 
 NOTE: this is the GPU-server benchmark arm (vs XGBoost). The 안심존 competition
 entry stays on the lightweight XGBoost pipeline (see docs/competition-strategy.md).
@@ -79,9 +80,10 @@ def evaluate(model, loader, device) -> dict[str, float]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LSTM/GRU vital-sign early-warning baseline")
+    parser = argparse.ArgumentParser(description="LSTM/GRU/Transformer vital-sign early-warning baseline")
     parser.add_argument("--data-dir", default=None, help="dir of per-patient CSV/Parquet/PSV (default: dummy)")
-    parser.add_argument("--rnn", choices=["lstm", "gru"], default="lstm")
+    parser.add_argument("--arch", "--rnn", dest="rnn", choices=["lstm", "gru", "transformer"], default="lstm",
+                        help="sequence architecture (--rnn kept as an alias)")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--hidden", type=int, default=64)

@@ -165,16 +165,18 @@
 
 ### 지금 즉시 — 8/31(월) 10:00 마감 ⚠️
 - [ ] **분석환경 사전신청 회신** — dacon@dacon.io + 602626@kyuh.ac.kr 둘 다.
-      Python 3.11 + 패키지 172종(버전 고정; 대안 모델 대비 torch 2.13.0(CPU)·
-      imbalanced-learn 포함, 공유 패키지는 기존 141종과 버전 충돌 0으로 결합 검증)
-      + 사전학습 모델(XGBoost JSON, 보조 비교 모델 여지 명시) + 코드·나눔고딕 폰트
+      Python 3.11 + 패키지 190종(버전 고정; 대안 모델 대비 torch(CPU)·transformers·
+      tabpfn·pytorch-tabnet·skorch·einops·imbalanced-learn 포함, 전 조합 pip 결합
+      검증 — 공유 패키지 버전 충돌 0, 5종 모두 실제 설치·import·동작 확인)
+      + 사전학습 모델(XGBoost JSON + TabPFN v2 공개 체크포인트, 보조 모델 여지 명시)
+      + 코드·나눔고딕 폰트
       반입 선언. GPU 불필요(계명대 GPU 불가 — 단 추후 가능 시 활용 검토 문구 포함)
       ※ PyPI 표준 torch 휠은 GPU가 없어도 nvidia-* 부속이 있어야 import 됨 —
         선언 목록에 전부 포함되어 있음 (컨테이너에서 실측 확인)
 
 **반입 준비 자동화 (완료):** `python scripts/make_carryin_bundle.py` 가 선언 그대로의
 코드 스냅샷 ZIP을 생성 — narrate LLM부 제거(DUA 가드는 유지), 폰트는 별도 반입,
-딥러닝 벤치마크(train_dl.py + LSTM/GRU)는 torch 선언에 맞춰 포함,
+딥러닝 벤치마크(train_dl.py + LSTM/GRU/Transformer)는 torch 선언에 맞춰 포함,
 스테이징 사본 안에서 전체 테스트를 돌려 자가검증 후 압축(선언 1MB 이내).
 결과보고서용 그림(vitals_report·vitals_phenotype)은 전부 한글 라벨 + 번들 폰트로 전환.
 

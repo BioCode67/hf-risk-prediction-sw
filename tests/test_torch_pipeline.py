@@ -43,6 +43,52 @@ def test_model_forward_shape():
     assert logits.shape == (4,)  # one logit per patient
 
 
+def test_transformer_forward_shape_and_padding_invariance():
+    """Transformer emits one logit per patient, and padded steps cannot leak."""
+    from model import build_model
+
+    model = build_model(input_size=7, rnn_type="transformer", hidden_size=16)
+    model.eval()
+    x = torch.randn(4, 10, 7)
+    lengths = torch.tensor([10, 7, 4, 2])
+    logits = model(x, lengths)
+    assert logits.shape == (4,)
+
+    # Garbage in the padded region must not change any output.
+    corrupted = x.clone()
+    for row, length in enumerate(lengths):
+        corrupted[row, int(length):] = 999.0
+    with torch.no_grad():
+        assert torch.allclose(model(x, lengths), model(corrupted, lengths), atol=1e-5)
+
+
+def test_transformer_training_step_reduces_loss():
+    """A few optimizer steps on learnable dummy data should reduce BCE loss."""
+    from dataset import build_datasets, make_dataloader
+    from model import build_model
+
+    seqs, labels = _dummy(n=60, f=7)
+    train_ds, _ = build_datasets(seqs, labels, seed=1)
+    loader = make_dataloader(train_ds, batch_size=16, shuffle=True)
+
+    torch.manual_seed(0)
+    model = build_model(7, rnn_type="transformer", hidden_size=16)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    loss_fn = torch.nn.BCEWithLogitsLoss()
+
+    first, last = None, None
+    for _ in range(6):
+        for batch in loader:
+            opt.zero_grad()
+            loss = loss_fn(model(batch["x"], batch["lengths"]), batch["y"])
+            loss.backward()
+            opt.step()
+            last = loss.item()
+            if first is None:
+                first = last
+    assert last < first  # learning happened
+
+
 def test_training_step_reduces_loss():
     """A few optimizer steps on learnable dummy data should reduce BCE loss."""
     from dataset import build_datasets, make_dataloader
