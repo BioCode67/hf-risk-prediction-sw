@@ -31,6 +31,8 @@ from xgboost import XGBClassifier
 from xgboost.core import XGBoostError
 
 from vitals_data import (
+    add_personalized_features,
+    add_static_features,
     build_windows,
     generate_synthetic_cohort,
     patient_level_split,
@@ -400,6 +402,35 @@ def save_artifact(
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
+def load_artifact(model_path: str | Path) -> dict[str, Any]:
+    """Load a saved artifact — either the pickle or the JSON pair.
+
+    A ``.json`` path is the 안심존 route: the booster JSON written by
+    ``save_artifact`` is loaded through XGBoost's own reader (no pickle
+    deserialization of a carried-in file), and the preprocessing state comes
+    from the ``*_config.json`` beside it. Anything else is read as the pickle.
+    Both return the same dict shape: ``model`` / ``feature_names`` /
+    ``imputation_medians`` / ``metrics``.
+    """
+    path = Path(model_path)
+    if path.suffix != ".json":
+        with path.open("rb") as handle:
+            return pickle.load(handle)
+
+    model = XGBClassifier()
+    model.load_model(str(path))
+    config_path = path.with_name(path.stem + "_config.json")
+    config: dict[str, Any] = {}
+    if config_path.exists():
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    return {
+        "model": model,
+        "feature_names": config.get("feature_names", list(model.get_booster().feature_names or [])),
+        "imputation_medians": config.get("imputation_medians", {}),
+        "metrics": config.get("metrics", {}),
+    }
+
+
 def _print_metrics(metrics: EarlyWarningMetrics) -> None:
     print(f"=== {metrics.model_name} ===")
     print(f"  AUPRC: {metrics.auprc:.4f}")
@@ -430,7 +461,10 @@ def train(
     model_path = project_root / model_dir if not Path(model_dir).is_absolute() else Path(model_dir)
 
     cohort = generate_synthetic_cohort(n_patients=n_patients, arrest_fraction=arrest_fraction, seed=seed)
-    windowed = build_windows(cohort)
+    # Full proposal feature set (§6.1): 44 window statistics + 12 personalized
+    # baseline deviations + 2 static (age/sex) = 58. The saved artifact must
+    # score with the same columns the deployed pipeline produces.
+    windowed = add_static_features(add_personalized_features(build_windows(cohort), cohort), cohort)
     split = patient_level_split(windowed, test_size=0.2, seed=seed)
 
     overrides = (

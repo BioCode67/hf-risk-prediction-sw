@@ -135,7 +135,7 @@
   - vitals_api.py      : 대시보드용 FastAPI. 사전계산 아티팩트를 읽어 0.1초에 기동
 - 대시보드(web/): Next.js. 근거를 전부 미리 계산해 정적 JSON으로 굽기 때문에 배포에는
   파이썬도 ML 라이브러리도 필요 없음(706MB → 0). scripts/export_dashboard.py로 생성
-- 품질: 테스트 88개 (76 pass / 12 skip — 데이터 의존분만 skip), CI(3.11/3.12) 반영.
+- 품질: 테스트 90개 (78 pass / 12 skip — 데이터 의존분만 skip), CI(3.11/3.12) 반영.
   합성 데이터를 내장해 데이터 없이도 실행됨
   주의: `pytest` 실행 파일이 uv 격리 환경일 수 있음 → `python -m pytest` 사용
 - 원커맨드: python src/mimic_explore.py <MIMIC경로> --model [--gpu] [--tune] [--trials=N]
@@ -176,8 +176,11 @@
 ### 9월 초 — 패키지 설치 대기 2~3주 동안 (안심존 밖)
 
 - [ ] **MIMIC-IV 사전학습 모델 생성** — KOREN GPU에서.
-      `--arrest-counts` 로 표본 확인 → `--model --gpu` → **XGBoost JSON 포맷 저장**
-      (사전신청서에 JSON으로 선언 — pickle 아님)
+      `--arrest-counts` 로 표본 확인 → `--model --gpu`. 저장은 자동:
+      `models/vitals_ews_model_mimic.json` + `_config.json` (사전신청서에 선언한
+      XGBoost JSON 포맷 — pickle 아님). 안심존에서는 이 JSON을
+      `vitals_train.load_artifact("....json")` 으로 읽어 추가 학습·보정
+      (booster JSON + config 로더 구현·round-trip 테스트 완료)
 - [ ] **사건 유형별 개인화 유효성 비교** — `scripts/ablate_personalized.py` 를
       `--mimic`(심정지)과 `--challenge2019`(패혈증) 양쪽에 돌려 비교.
       "개인 기저선 이탈이 어떤 사건에서 유효한가"는 §9-5의 3번 검증 항목이자

@@ -127,7 +127,7 @@ python src/sepsis_explore.py <dir> --horizon=6    # real Challenge-2019 data (se
 python src/mortality_explore.py <dir> --horizon=6 # real Challenge-2012 data (ICU mortality)
 python src/mimic_explore.py <dir> --model --gpu  # real MIMIC-IV
 
-python -m pytest -q             # 88 tests: 76 pass, 12 skip without data
+python -m pytest -q             # 90 tests: 78 pass, 12 skip without data
                                 # (a bare `pytest` may be a uv tool without numpy)
 
 # dashboard — two processes
@@ -203,5 +203,5 @@ uvicorn main:app --app-dir legacy --reload   # serve API; docs at /docs
 - **Static heart-failure track (archived).** In `legacy/`, kept for the FastAPI
   server and the OMOP CDM converter. Not part of the entry. Do not add work there.
 
-88 tests (76 pass, 12 skip without data — the skips are the data-dependent ones). Docs: `competition-strategy.md`,
+90 tests (78 pass, 12 skip without data — the skips are the data-dependent ones). Docs: `competition-strategy.md`,
 `proposal-draft.md`, `differentiation.md`.

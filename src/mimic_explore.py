@@ -169,10 +169,17 @@ def run_model(
     ``use_gpu`` trains on CUDA; ``tune`` runs a patient-grouped Optuna AUPRC search
     (``n_trials``) and trains the final model on the best hyperparameters.
     """
-    from vitals_data import add_personalized_features, build_windows, cohort_from_mimic, patient_level_split
+    from vitals_data import (
+        add_personalized_features,
+        add_static_features,
+        build_windows,
+        cohort_from_mimic,
+        patient_level_split,
+    )
     from vitals_train import (
         evaluate_news_baseline,
         lead_time_summary,
+        save_artifact,
         threshold_at_specificity,
         train_xgboost,
         tune_xgboost,
@@ -181,7 +188,7 @@ def run_model(
     tables = load_mimic_demo(root)
     arrests = load_arrest_events(root, arrest_itemids)
     cohort = cohort_from_mimic(tables["chartevents_vitals"], arrest_events=arrests)
-    windowed = add_personalized_features(build_windows(cohort), cohort)
+    windowed = add_static_features(add_personalized_features(build_windows(cohort), cohort), cohort)
 
     positives = int(windowed.labels.sum())
     print(f"Arrest stays: {arrests['stay_id'].nunique()} | positive (pre-arrest) windows: {positives} / {len(windowed.labels)}")
@@ -211,11 +218,21 @@ def run_model(
             f"median {lead['median_lead_time_h']:.1f}h before arrest (@95% specificity)"
         )
 
+    # Persist the pretrained model in both formats before anything that can
+    # fail — the booster JSON + config pair is what the 안심존 declaration
+    # names as the carry-in files ("자체 학습 예정, MIMIC-IV 원자료 미반입").
+    models_dir = Path(__file__).resolve().parent.parent / "models"
+    artifact_path = models_dir / "vitals_ews_model_mimic.pkl"
+    save_artifact(model, split, xgb, artifact_path)
+    print(
+        f"\nModel saved: {artifact_path} "
+        f"(+ {artifact_path.stem}.json / {artifact_path.stem}_config.json for carry-in)"
+    )
+
     # Render the full 본선 figure set from the real data, in one command.
     from vitals_phenotype import discover_phenotypes
     from vitals_report import render_report
 
-    models_dir = Path(__file__).resolve().parent.parent / "models"
     print()
     render_report(split, model, cohort, models_dir)
     try:

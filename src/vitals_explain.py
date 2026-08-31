@@ -8,7 +8,6 @@ trees and needs no internet — suitable for the offline 안심존.
 
 from __future__ import annotations
 
-import pickle
 import weakref
 from pathlib import Path
 from typing import Any
@@ -105,9 +104,10 @@ def save_summary_plot(
 
 
 def load_artifact(model_path: str | Path) -> dict[str, Any]:
-    """Load a saved early-warning model artifact."""
-    with Path(model_path).open("rb") as handle:
-        return pickle.load(handle)
+    """Load a saved early-warning model artifact (pickle or JSON pair)."""
+    from vitals_train import load_artifact as _load
+
+    return _load(model_path)
 
 
 def generate_explanations(
@@ -119,7 +119,13 @@ def generate_explanations(
     Rebuilds a synthetic test split to explain against, so it runs end-to-end
     without external data.
     """
-    from vitals_data import build_windows, generate_synthetic_cohort, patient_level_split
+    from vitals_data import (
+        add_personalized_features,
+        add_static_features,
+        build_windows,
+        generate_synthetic_cohort,
+        patient_level_split,
+    )
 
     project_root = Path(__file__).resolve().parent.parent
     model_file = Path(model_path) if model_path else project_root / "models" / "vitals_ews_model.pkl"
@@ -129,7 +135,11 @@ def generate_explanations(
     model = artifact["model"]
     feature_names: list[str] = artifact["feature_names"]
 
-    split = patient_level_split(build_windows(generate_synthetic_cohort()))
+    # Rebuild the same 58-column feature set vitals_train.train() fits on —
+    # SHAP needs the explained matrix to match the model's training columns.
+    cohort = generate_synthetic_cohort()
+    windowed = add_static_features(add_personalized_features(build_windows(cohort), cohort), cohort)
+    split = patient_level_split(windowed)
     top_features = global_top_features(model, split.X_test, feature_names, top_k=5)
 
     # Explain the highest-risk window (most useful for a clinician).

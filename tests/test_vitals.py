@@ -352,3 +352,40 @@ def test_shap_window_factors(trained):
     assert len(factors) == 3
     for factor in factors:
         assert {"feature", "shap_value", "feature_value"} <= set(factor)
+
+
+def test_artifact_json_round_trip(trained, tmp_path):
+    """The 안심존 carry-in path: booster JSON + config reload to identical scores."""
+    import numpy as np
+
+    from vitals_train import load_artifact, save_artifact
+
+    model, metrics, split = trained
+    artifact_path = tmp_path / "vitals_ews_model.pkl"
+    save_artifact(model, split, metrics, artifact_path)
+
+    json_path = artifact_path.with_suffix(".json")
+    assert json_path.exists()
+    assert artifact_path.with_name("vitals_ews_model_config.json").exists()
+
+    loaded = load_artifact(json_path)
+    assert loaded["feature_names"] == split.feature_names
+    assert set(loaded["imputation_medians"]) == set(split.imputation_medians.keys())
+    assert loaded["metrics"]["auprc"] == pytest.approx(metrics.auprc)
+
+    original = model.predict_proba(split.X_test)[:, 1]
+    reloaded = loaded["model"].predict_proba(split.X_test)[:, 1]
+    np.testing.assert_allclose(reloaded, original, rtol=1e-6, atol=1e-7)
+
+
+def test_artifact_pickle_round_trip(trained, tmp_path):
+    """The in-repo path keeps working: the pickle reloads through load_artifact."""
+    from vitals_train import load_artifact, save_artifact
+
+    model, metrics, split = trained
+    artifact_path = tmp_path / "vitals_ews_model.pkl"
+    save_artifact(model, split, metrics, artifact_path)
+
+    loaded = load_artifact(artifact_path)
+    assert loaded["feature_names"] == split.feature_names
+    assert loaded["metrics"]["model_name"] == metrics.model_name
