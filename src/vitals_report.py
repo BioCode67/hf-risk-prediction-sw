@@ -10,6 +10,10 @@ the story the proposal promises, from any cohort:
 
 Matplotlib only (headless Agg); imported lazily so the rest of the pipeline does
 not depend on it. Figures are written under ``models/`` (git-ignored).
+
+Labels are Korean because these exact figures go into the 본선 결과보고서; the
+안심존 has no Korean system fonts, so ``plot_fonts`` registers the bundled
+NanumGothic before anything is drawn.
 """
 
 from __future__ import annotations
@@ -22,15 +26,20 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, precision_recall_curve
 
 from vitals_data import VITALS
+from vitals_narrate import VITAL_KO
 
 
 def _new_axes(figsize: tuple[float, float]):
-    """Create a headless matplotlib figure/axes (lazy import)."""
+    """Create a headless matplotlib figure/axes with a Korean font (lazy import)."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    from plot_fonts import ensure_korean_font
+
+    plt.rcParams["font.family"] = ensure_korean_font()
+    plt.rcParams["axes.unicode_minus"] = False
     return plt, *plt.subplots(figsize=figsize)
 
 
@@ -41,11 +50,11 @@ def plot_pr_curves(y_true: np.ndarray, scores: dict[str, np.ndarray], output_pat
     for name, score in scores.items():
         precision, recall, _ = precision_recall_curve(y_true, score)
         auprc = average_precision_score(y_true, score)
-        ax.plot(recall, precision, label=f"{name} (AUPRC={auprc:.3f})", linewidth=2)
-    ax.axhline(prevalence, ls="--", c="grey", lw=1, label=f"chance (prevalence={prevalence:.3f})")
-    ax.set_xlabel("Recall (sensitivity)")
-    ax.set_ylabel("Precision")
-    ax.set_title("Precision–Recall: early-warning alarm quality")
+        ax.plot(recall, precision, label=f"{name} — AUPRC {auprc:.3f}", linewidth=2)
+    ax.axhline(prevalence, ls="--", c="grey", lw=1, label=f"우연 수준 (양성률={prevalence:.3f})")
+    ax.set_xlabel("재현율 (민감도)")
+    ax.set_ylabel("정밀도")
+    ax.set_title("정밀도–재현율 곡선: 조기경보 알람 품질")
     ax.legend(loc="upper right")
     ax.set_ylim(0, 1)
     output = Path(output_path)
@@ -66,13 +75,18 @@ def plot_deterioration_trajectory(
     fig.clf()
     axes = fig.subplots(2, 3)
     hours = patient_vitals["hour"].to_numpy()
+    has_arrest = arrest_hour is not None and np.isfinite(arrest_hour)
     for ax, vital in zip(axes.ravel(), VITALS):
         ax.plot(hours, patient_vitals[vital].to_numpy(), marker=".", lw=1.2)
-        if arrest_hour is not None and np.isfinite(arrest_hour):
+        if has_arrest:
+            # axvline is excluded from autoscale, so a panel whose data ends
+            # before the arrest hour would silently clip the marker out.
             ax.axvline(arrest_hour, c="red", ls="--", lw=1.2)
-        ax.set_title(vital)
-        ax.set_xlabel("hour")
-    fig.suptitle("Vital-sign trajectory before in-hospital cardiac arrest (red = arrest)")
+            ax.set_xlim(right=max(float(hours.max()), float(arrest_hour)) + 0.8)
+        label, unit = VITAL_KO[vital]
+        ax.set_title(f"{label} ({unit})")
+        ax.set_xlabel("경과 시간 (h)")
+    fig.suptitle("심정지 전 활력징후 궤적 (빨간 선 = 심정지 시점)")
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -102,9 +116,9 @@ def plot_alarm_burden_curve(
             threshold = threshold_at_sensitivity(y_true, score, float(target))
             alarms.append(100.0 * float((score >= threshold).mean()))
         ax.plot(grid, alarms, marker="o", lw=2, label=name)
-    ax.set_xlabel("Matched sensitivity (detection rate)")
-    ax.set_ylabel("Alarms per 100 windows")
-    ax.set_title("Alarm burden at matched sensitivity (lower is better)")
+    ax.set_xlabel("동일 민감도 (검출률)")
+    ax.set_ylabel("100 윈도우당 알람 수")
+    ax.set_title("동일 검출률에서의 알람 부담 (낮을수록 좋음)")
     ax.legend()
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -120,11 +134,11 @@ def plot_lead_time_distribution(lead_times: list[float], output_path: str | Path
     values = np.asarray(lead_times, dtype=float)
     if values.size:
         ax.hist(values, bins=min(20, max(5, values.size)), color="#3b7dd8", edgecolor="white")
-        ax.axvline(float(np.median(values)), c="red", ls="--", lw=1.5, label=f"median={np.median(values):.1f}h")
+        ax.axvline(float(np.median(values)), c="red", ls="--", lw=1.5, label=f"중앙값 {np.median(values):.1f}시간")
         ax.legend()
-    ax.set_xlabel("Lead time before arrest (hours)")
-    ax.set_ylabel("Patients")
-    ax.set_title("Early-warning lead-time distribution")
+    ax.set_xlabel("심정지까지 남은 시간 — 첫 알람 시점 (시간)")
+    ax.set_ylabel("환자 수")
+    ax.set_title("조기경보 리드타임 분포")
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -145,7 +159,7 @@ def render_report(split: Any, model: Any, cohort: Any, out_dir: str | Path) -> d
     xgb_score = model.predict_proba(split.X_test)[:, 1]
     news_score = compute_news_scores(split.X_test)
     threshold = threshold_at_specificity(split.y_test, xgb_score)
-    scores = {"XGBoost": xgb_score, "NEWS": news_score}
+    scores = {"본 모델 (XGBoost)": xgb_score, "NEWS (임상 표준)": news_score}
 
     pr_path = plot_pr_curves(split.y_test, scores, out / "vitals_pr_curve.png")
     burden_path = plot_alarm_burden_curve(split.y_test, scores, out / "vitals_alarm_burden.png")
