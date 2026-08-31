@@ -165,12 +165,15 @@
 
 ### 지금 즉시 — 8/31(월) 10:00 마감 ⚠️
 - [ ] **분석환경 사전신청 회신** — dacon@dacon.io + 602626@kyuh.ac.kr 둘 다.
-      Python 3.11 + 패키지 190종(버전 고정; 대안 모델 대비 torch(CPU)·transformers·
-      tabpfn·pytorch-tabnet·skorch·einops·imbalanced-learn 포함, 전 조합 pip 결합
-      검증 — 공유 패키지 버전 충돌 0, 5종 모두 실제 설치·import·동작 확인)
-      + 사전학습 모델(XGBoost JSON + TabPFN v2 공개 체크포인트, 보조 모델 여지 명시)
-      + 코드·나눔고딕 폰트
-      반입 선언. GPU 불필요(계명대 GPU 불가 — 단 추후 가능 시 활용 검토 문구 포함)
+      **전 항목 최대 신청 방침** (변경 불가 전제, 나중에 골라 쓰기):
+      · 언어: Python 3.11.15(주) + R 4.x(보조 — 설치 곤란 시 제외 무방 명시)
+      · 패키지: 200종 버전 고정 — 부스팅 3 + torch(LSTM/GRU/Transformer) +
+        transformers·tabpfn·pytorch-tabnet·skorch·einops·imbalanced-learn +
+        lifelines(생존)·umap/hdbscan(군집)·pyarrow/polars·pyreadstat(sav).
+        전 조합 pip 결합 검증(충돌 0), 신규 11종 실제 설치·동작 확인, wheel 199/200
+      · 모델: 자체 XGBoost JSON + 보조 DL 가중치 + TabPFN v2·2.5 공개 체크포인트,
+        합계 2GB 이내 · 파일: 코드 ZIP 10MB + 폰트 10MB
+      · GPU: "사용 희망(필수 아님)" — 단 장소 변경 의사 없음을 명시해 대구 고정
       ※ PyPI 표준 torch 휠은 GPU가 없어도 nvidia-* 부속이 있어야 import 됨 —
         선언 목록에 전부 포함되어 있음 (컨테이너에서 실측 확인)
 
