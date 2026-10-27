@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""PRODROME(전조) — K-Health 본선 안심존 원커맨드 분석.
+
+    python run_khth.py <KHTH 데이터 폴더 또는 파일>          # 실데이터
+    python run_khth.py --selftest                            # 합성 데이터로 동작 확인(안심존 첫 실행 전)
+    옵션: --horizons=1,4   --tune --trials=30   --gpu   --out=results
+
+입력: KHTH_PINFO, KHTH_VITAL (csv / xlsx / parquet / sas7bdat 자동 탐색, 인코딩 utf-8 → cp949 자동)
+출력(results/): 반출용 **집계값만** — 환자 단위 행·식별자·원값은 쓰지 않는다.
+  00_README.txt            무엇이 들어 있는지 · 반출 심의용 설명
+  01_cohort_summary.csv    코호트 규모·결측률·관찰시간(집계)
+  02_model_comparison.csv  XGBoost(+개인 기저선) / XGBoost(기저선 없음) / NEWS — AUPRC·ROC·민감도@95%특이도
+  03_alarm_burden.csv      같은 민감도(50·70·80·90%)에서 경보 부담
+  04_lead_time.csv         선행시간 요약(중앙값·사분위·검출률)
+  05_shap_top.csv          전역 SHAP 상위 15 특징
+  06_phenotypes.csv        표현형 군집 중심(변화량) · 군집 크기(5 미만은 '<5' 마스킹)
+  07_horizon_sensitivity.csv  예측 지평(1h·4h …)별 성능
+  fig_*.png                PR 곡선 · 경보부담 곡선 · 선행시간 분포 · SHAP 요약(막대) · 표현형 · 심정지 전 평균 궤적
+  metrics.json             위 수치 전체
+"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "src"))
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    pass
+
+import numpy as np
+import pandas as pd
+
+MASK_N = 5  # 반출 소표본 마스킹 기준
+
+
+# ─────────────────────────────────────────────── 입력
+def _read_any(path: Path) -> pd.DataFrame:
+    suf = path.suffix.lower()
+    if suf in (".parquet", ".pq"):
+        return pd.read_parquet(path)
+    if suf in (".xlsx", ".xls"):
+        return pd.read_excel(path, dtype=str)
+    if suf == ".sas7bdat":
+        return pd.read_sas(path, encoding="utf-8")
+    for enc in ("utf-8-sig", "cp949", "euc-kr"):
+        try:
+            return pd.read_csv(path, dtype=str, encoding=enc, low_memory=False)
+        except UnicodeDecodeError:
+            continue
+    raise RuntimeError(f"읽기 실패: {path}")
+
+
+def find_tables(root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    files = [root] if root.is_file() else [p for p in root.rglob("*") if p.is_file()]
+    pick = {}
+    for key in ("PINFO", "VITAL"):
+        cands = [p for p in files if key in p.name.upper()
+                 and p.suffix.lower() in (".csv", ".txt", ".xlsx", ".xls", ".parquet", ".pq", ".sas7bdat")]
+        if not cands:
+            raise SystemExit(f"[오류] {root} 아래에서 KHTH_{key} 파일을 찾지 못했습니다. 파일 경로를 직접 주세요.")
+        pick[key] = sorted(cands, key=lambda p: p.stat().st_size, reverse=True)[0]
+        print(f"  KHTH_{key}: {pick[key]}")
+    pinfo, vital = _read_any(pick["PINFO"]), _read_any(pick["VITAL"])
+    pinfo.columns = [c.strip().upper() for c in pinfo.columns]
+    vital.columns = [c.strip().upper() for c in vital.columns]
+    return pinfo, vital
+
+
+def normalize(pinfo: pd.DataFrame, vital: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """설명서 스키마에 맞춘다: AGE는 '60대' 같은 연령대 문자열일 수 있다, 날짜는 YYYYMMDDHHMI."""
+    pinfo = pinfo.copy(); vital = vital.copy()
+    if "AGE" in pinfo.columns:
+        pinfo["AGE"] = pinfo["AGE"].astype(str).str.extract(r"(\d+)")[0]
+    if "SEX" in pinfo.columns:
+        s = pinfo["SEX"].astype(str).str.strip().str.upper()
+        pinfo["SEX"] = s.replace({"1": "M", "2": "F", "남": "M", "여": "F", "MALE": "M", "FEMALE": "F"})
+    for df, cols in ((pinfo, ("INDD", "OUDD", "CARDT", "DEATHDT")), (vital, ("INDD", "VSDT"))):
+        for c in cols:
+            if c in df.columns:
+                v = df[c].astype(str).str.replace(r"[^0-9]", "", regex=True)
+                # 날짜만(YYYYMMDD) 있는 열은 00:00으로 채운다. 조인키(INDD)는 원문 유지 후 숫자만.
+                df[c] = v.where(v.str.len() != 8, v + "0000").str[:12]
+    if "VS_GBN" in vital.columns:
+        vital["VS_GBN"] = vital["VS_GBN"].astype(str).str.strip().str.upper().replace({"PR": "HR", "PULSE": "HR", "SPO₂": "SPO2"})
+    return pinfo, vital
+
+
+# ─────────────────────────────────────────────── 합성 KHTH (selftest)
+def fake_khth(n=160, seed=0) -> tuple[pd.DataFrame, pd.DataFrame]:
+    from vitals_data import generate_synthetic_cohort
+    c = generate_synthetic_cohort(n_patients=n, arrest_fraction=1.0, seed=seed)
+    base = pd.Timestamp("2024-03-01 08:00")
+    rows = []
+    code = {"pulse": "HR", "sbp": "SBP", "dbp": "DBP", "temperature": "BT", "spo2": "SPO2", "resp_rate": "RR"}
+    ids = {pid: f"P{i:04d}" for i, pid in enumerate(c.vitals["patient_id"].unique())}
+    for r in c.vitals.itertuples(index=False):
+        t = base + pd.Timedelta(hours=float(r.hour)) + pd.Timedelta(minutes=7)
+        for v, g in code.items():
+            val = getattr(r, v)
+            if pd.notna(val):
+                rows.append((ids[r.patient_id], "20240301", t.strftime("%Y%m%d%H%M"), g, f"{val:.1f}"))
+    vital = pd.DataFrame(rows, columns=["PATID", "INDD", "VSDT", "VS_GBN", "VS_RSLT"])
+    ev = c.events.set_index("patient_id")["arrest_hour"]
+    rng = np.random.default_rng(seed)
+    pinfo = pd.DataFrame({
+        "PATID": [ids[p] for p in ids], "INDD": "20240301",
+        "AGE": [f"{rng.choice([20,30,40,50,60,70,80])}대" for _ in ids],
+        "SEX": rng.choice(["M", "F"], len(ids)),
+        "CARDT": [(base + pd.Timedelta(hours=float(ev[p]))).strftime("%Y%m%d%H%M") for p in ids],
+    })
+    return pinfo, vital
+
+
+# ─────────────────────────────────────────────── 분석
+def mask(n: int) -> str:
+    return f"<{MASK_N}" if n < MASK_N else str(int(n))
+
+
+def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False) -> dict:
+    from vitals_data import (VITALS, add_personalized_features, add_static_features,
+                             build_windows, cohort_from_khth, patient_level_split)
+    from vitals_train import (alarm_burden, compute_news_scores, evaluate, lead_time_summary,
+                              threshold_at_specificity, train_xgboost, tune_xgboost)
+    from vitals_report import plot_alarm_burden_curve, plot_lead_time_distribution, plot_pr_curves
+
+    out.mkdir(parents=True, exist_ok=True)
+    M: dict = {"generated": time.strftime("%Y-%m-%d %H:%M"), "mask_threshold": MASK_N}
+    t0 = time.time()
+
+    cohort = cohort_from_khth(vital, pinfo)
+    v = cohort.vitals
+    stays = v["patient_id"].nunique()
+    arrest_known = int(cohort.events["arrest_hour"].notna().sum())
+    obs_h = v.groupby("patient_id")["hour"].max()
+    ah = cohort.events["arrest_hour"].dropna()
+    cs = pd.DataFrame([
+        ("입원(PATID+INDD) 수", stays),
+        ("환자(PATID) 수", pinfo["PATID"].nunique() if "PATID" in pinfo else np.nan),
+        ("심정지 시각(CARDT) 확인 입원 수", arrest_known),
+        ("활력징후 원 측정 행 수", len(vital)),
+        ("시간 단위(1h) 행 수", len(v)),
+        ("관찰시간 중앙값(h)", float(obs_h.median())),
+        ("관찰시간 IQR(h)", f"{obs_h.quantile(.25):.0f}–{obs_h.quantile(.75):.0f}"),
+        ("입원→심정지 중앙값(h)", float(ah.median()) if len(ah) else np.nan),
+    ], columns=["항목", "값"])
+    miss = (1 - v[list(VITALS)].notna().mean()).mul(100).round(1)
+    for k_, m_ in miss.items():
+        cs.loc[len(cs)] = (f"시간당 결측률 {k_}(%)", m_)
+    cs.to_csv(out / "01_cohort_summary.csv", index=False, encoding="utf-8-sig")
+    M["cohort"] = {r["항목"]: (r["값"] if not isinstance(r["값"], (np.floating, np.integer)) else float(r["값"])) for _, r in cs.iterrows()}
+    print(cs.to_string(index=False))
+
+    # 심정지 전 평균 궤적(집계) — 개별 환자 그림 대신
+    _mean_trajectory(cohort, out / "fig_6_prearrest_mean_trajectory.png", VITALS)
+
+    comparison, burden_rows, horizon_rows = [], [], []
+    for h in horizons:
+        base_w = build_windows(cohort, prediction_horizon_hours=h)
+        w_full = add_static_features(add_personalized_features(base_w, cohort), cohort)
+        pos = int(w_full.labels.sum())
+        print(f"\n[horizon {h}h] windows={len(w_full.labels):,} positives={pos:,}")
+        if pos < 10:
+            print("  양성 창이 10개 미만 — 건너뜀"); continue
+        split = patient_level_split(w_full)
+        params = tune_xgboost(split, n_trials=trials, use_gpu=gpu) if tune else {}
+        model, m_full = train_xgboost(split, use_gpu=gpu, **params)
+        score = model.predict_proba(split.X_test)[:, 1]
+        news = compute_news_scores(split.X_test)
+        m_news = evaluate("NEWS", split.y_test, news)
+
+        # 기저선 피처 제거(ablation) — 같은 환자 분할 유지
+        drop = [c for c in split.X_train.columns if c.endswith("_dev")]
+        from dataclasses import replace
+        split_nb = replace(split, X_train=split.X_train.drop(columns=drop), X_test=split.X_test.drop(columns=drop),
+                           feature_names=[f for f in split.feature_names if f not in drop])
+        model_nb, m_nb = train_xgboost(split_nb, use_gpu=gpu, **params)
+        m_nb.model_name = "XGBoost(기저선 피처 제외)"
+        m_full.model_name = "XGBoost(개인 기저선 포함)"
+
+        horizon_rows.append({"horizon_h": h, "windows": len(w_full.labels), "positive_windows": pos,
+                             "test_patients": int(len(set(split.groups_test))),
+                             "XGB_AUPRC": m_full.auprc, "NEWS_AUPRC": m_news.auprc,
+                             "XGB_ROC": m_full.roc_auc, "NEWS_ROC": m_news.roc_auc,
+                             "prevalence": m_full.prevalence})
+        if h != horizons[0]:
+            continue
+
+        for m in (m_full, m_nb, m_news):
+            comparison.append({"모델": m.model_name, "AUPRC": m.auprc, "ROC_AUC": m.roc_auc,
+                               "민감도@특이도95%": m.sensitivity_at_95_specificity,
+                               "정밀도@특이도95%": m.precision_at_threshold,
+                               "경보/100창@특이도95%": m.alarms_per_100_windows, "양성률": m.prevalence})
+        for name, s in (("XGBoost", score), ("NEWS", news)):
+            for sens in (0.5, 0.7, 0.8, 0.9):
+                b = alarm_burden(split.y_test, s, target_sensitivity=sens)
+                burden_rows.append({"모델": name, "목표 민감도": sens, "실제 민감도": b["sensitivity"],
+                                    "특이도": b["specificity"], "오경보 비율": b["false_alarm_rate"],
+                                    "경보/100창": b["alarms_per_100_windows"]})
+
+        thr = threshold_at_specificity(split.y_test, score)
+        lead = lead_time_summary(split, score, thr)
+        frame = pd.DataFrame({"p": split.groups_test, "tta": split.time_to_arrest_test, "s": score})
+        arr = frame[frame["tta"].notna() & (frame["tta"] >= 0)]
+        lts = [float(g[(g.s >= thr) & (g.tta <= 48)].tta.max()) for _, g in arr.groupby("p") if ((g.s >= thr) & (g.tta <= 48)).any()]
+        lt = pd.DataFrame([{
+            "기준": "XGBoost @ 특이도 95% 임계값, 심정지 전 48h 이내 첫 경보",
+            "평가 심정지 입원 수": mask(int(lead.get("arrest_patients", 0))),
+            "검출 수": mask(int(lead.get("detected", 0))),
+            "검출률": lead.get("detection_rate", np.nan),
+            "선행시간 중앙값(h)": float(np.median(lts)) if len(lts) >= MASK_N else np.nan,
+            "선행시간 Q1(h)": float(np.quantile(lts, .25)) if len(lts) >= MASK_N else np.nan,
+            "선행시간 Q3(h)": float(np.quantile(lts, .75)) if len(lts) >= MASK_N else np.nan,
+        }])
+        lt.to_csv(out / "04_lead_time.csv", index=False, encoding="utf-8-sig")
+        M["lead_time"] = lt.iloc[0].to_dict()
+
+        plot_pr_curves(split.y_test, {"XGBoost": score, "NEWS": news}, out / "fig_1_pr_curve.png")
+        plot_alarm_burden_curve(split.y_test, {"XGBoost": score, "NEWS": news}, out / "fig_2_alarm_burden.png",
+                                sensitivities=np.linspace(0.5, 0.95, 10))
+        if len(lts) >= MASK_N:
+            plot_lead_time_distribution(lts, out / "fig_3_lead_time.png")
+
+        # SHAP — 전역 중요도(집계)만. 개별 창 설명은 반출하지 않는다.
+        try:
+            from vitals_explain import global_top_features
+            Xs = split.X_test.sample(min(5000, len(split.X_test)), random_state=0)
+            top = pd.DataFrame(global_top_features(model, Xs, list(split.X_test.columns), top_k=15))
+            top.to_csv(out / "05_shap_top.csv", index=False, encoding="utf-8-sig")
+            M["shap_top"] = top.to_dict("records")
+            _bar(top, out / "fig_4_shap_top.png")
+        except Exception as e:
+            print(f"(SHAP 생략: {e})")
+
+        M["params"] = params
+
+    pd.DataFrame(comparison).to_csv(out / "02_model_comparison.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(burden_rows).to_csv(out / "03_alarm_burden.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(horizon_rows).to_csv(out / "07_horizon_sensitivity.csv", index=False, encoding="utf-8-sig")
+    M["model_comparison"], M["alarm_burden"], M["horizons"] = comparison, burden_rows, horizon_rows
+
+    # 표현형
+    try:
+        from vitals_phenotype import cluster_phenotypes, patient_prearrest_signatures, plot_phenotypes
+        sig = patient_prearrest_signatures(cohort)
+        if len(sig) >= 3 * MASK_N:
+            labels, cent = cluster_phenotypes(sig, k=3)
+            sizes = pd.Series(labels).value_counts().sort_index()
+            ph = cent.round(2).copy()
+            ph["군집 크기"] = [mask(int(n)) for n in sizes]
+            ph.to_csv(out / "06_phenotypes.csv", encoding="utf-8-sig")
+            M["phenotypes"] = ph.reset_index().astype(str).to_dict("records")
+            if sizes.min() >= MASK_N:
+                plot_phenotypes(cent, sizes, out / "fig_5_phenotypes.png")
+    except Exception as e:
+        print(f"(표현형 생략: {e})")
+
+    M["elapsed_sec"] = round(time.time() - t0, 1)
+    (out / "metrics.json").write_text(json.dumps(M, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (out / "00_README.txt").write_text(README_OUT, encoding="utf-8")
+    print(f"\n완료 — {out.resolve()}  ({M['elapsed_sec']}초)")
+    for p in sorted(out.iterdir()):
+        print("  ", p.name)
+    return M
+
+
+def _font():
+    import matplotlib
+    from matplotlib import font_manager
+    for f in sorted((HERE / "fonts").glob("*.ttf")):
+        font_manager.fontManager.addfont(str(f))
+    names = {f.name for f in font_manager.fontManager.ttflist}
+    for n in ("Pretendard", "NanumGothic", "Malgun Gothic", "AppleGothic"):
+        if n in names:
+            matplotlib.rcParams["font.family"] = n
+            break
+    matplotlib.rcParams["axes.unicode_minus"] = False
+
+
+def _bar(top: pd.DataFrame, path: Path):
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    _font()
+    t = top.iloc[::-1]
+    fig, ax = plt.subplots(figsize=(7, 5.5))
+    ax.barh(t["feature"], t["mean_abs_shap"], color="#0EA5B7")
+    ax.set_xlabel("mean |SHAP|"); ax.set_title("전역 특징 중요도 (상위 15)")
+    fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
+
+
+def _mean_trajectory(cohort, path: Path, VITALS):
+    """심정지 시각 기준 -48h~0h, 시간대별 중앙값·IQR (각 시점 n≥MASK_N만)."""
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    _font()
+    ev = cohort.events.dropna(subset=["arrest_hour"]).set_index("patient_id")["arrest_hour"]
+    v = cohort.vitals[cohort.vitals["patient_id"].isin(ev.index)].copy()
+    v["rel"] = np.floor(v["hour"] - v["patient_id"].map(ev))
+    v = v[(v["rel"] >= -48) & (v["rel"] < 0)]
+    if v.empty:
+        return
+    fig, axes = plt.subplots(2, 3, figsize=(12, 6.5))
+    for ax, vit in zip(axes.ravel(), VITALS):
+        g = v.groupby("rel")[vit]
+        q = g.quantile([.25, .5, .75]).unstack()
+        n = g.count()
+        q = q[n >= MASK_N]
+        ax.fill_between(q.index, q[.25], q[.75], alpha=.25, color="#0EA5B7")
+        ax.plot(q.index, q[.5], color="#0A7C8A", lw=2)
+        ax.axvline(0, color="#D97B1A", ls="--", lw=1)
+        ax.set_title(vit); ax.set_xlabel("심정지까지 시간(h)")
+    fig.suptitle("심정지 전 48시간 활력징후 — 시간대별 중앙값과 IQR (집계)")
+    fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
+
+
+README_OUT = """PRODROME(전조) 분석 결과물 — 반출 신청용 설명
+==================================================
+- 모든 파일은 집계 통계(평균·중앙값·비율·모델 성능 지표)와 그 그림만 담는다.
+- 환자 식별자(PATID), 날짜·시각, 개별 측정값, 환자 단위 예측값은 포함하지 않는다.
+- 소표본(셀 n<5)은 '<5'로 마스킹했고, n<5인 시점·군집은 그림에서 제외했다.
+- 모델 파일(가중치)은 반출 대상이 아니다.
+"""
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    opt = {a.split("=")[0]: (a.split("=", 1)[1] if "=" in a else True) for a in sys.argv[1:] if a.startswith("--")}
+    horizons = tuple(int(x) for x in str(opt.get("--horizons", "1,4")).split(","))
+    out = Path(opt.get("--out", "results"))
+    if "--selftest" in opt:
+        print("[selftest] 합성 KHTH 데이터로 전체 흐름을 확인합니다(실데이터 아님).")
+        pinfo, vital = fake_khth()
+        out = Path(opt.get("--out", "results_selftest"))
+    else:
+        if not args:
+            print(__doc__); return
+        print("[입력 탐색]")
+        pinfo, vital = find_tables(Path(args[0]))
+        print(f"  PINFO 열: {list(pinfo.columns)}\n  VITAL 열: {list(vital.columns)}")
+        print(f"  VS_GBN 값: {sorted(vital['VS_GBN'].astype(str).str.upper().unique())[:20]}")
+    pinfo, vital = normalize(pinfo, vital)
+    run(pinfo, vital, out, horizons=horizons, tune="--tune" in opt,
+        trials=int(opt.get("--trials", 30)), gpu="--gpu" in opt)
+
+
+if __name__ == "__main__":
+    main()
