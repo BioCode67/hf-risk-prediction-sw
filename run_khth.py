@@ -57,8 +57,36 @@ def _read_any(path: Path) -> pd.DataFrame:
     raise RuntimeError(f"읽기 실패: {path}")
 
 
+PINFO_COLS = ("PATID", "AGE", "SEX", "INDD", "OUDD", "OUTDD", "CARDT", "DEATHDT")
+VITAL_COLS = ("PATID", "INDD", "VSDT", "VS_GBN", "VS_RSLT")
+DATA_EXT = (".csv", ".txt", ".xlsx", ".xls", ".parquet", ".pq", ".sas7bdat")
+
+
+def split_merged(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """One long table with patient columns repeated on every vital row
+    (e.g. KNUH_DATA.csv) -> (pinfo, vital)."""
+    df.columns = [c.strip().upper() for c in df.columns]
+    pinfo = df[[c for c in PINFO_COLS if c in df.columns]].drop_duplicates(["PATID", "INDD"]).reset_index(drop=True)
+    vital = df[[c for c in VITAL_COLS if c in df.columns]]
+    print(f"  통합 파일 분리: 입원 {len(pinfo):,}건 / 측정 {len(vital):,}행")
+    return pinfo, vital
+
+
 def find_tables(root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     files = [root] if root.is_file() else [p for p in root.rglob("*") if p.is_file()]
+    data_files = [p for p in files if p.suffix.lower() in DATA_EXT and "results" not in p.parts]
+    # 통합 파일(한 파일에 VS_GBN 과 CARDT 가 함께 있음)을 먼저 찾는다.
+    for p in sorted(data_files, key=lambda p: p.stat().st_size, reverse=True):
+        try:
+            head = pd.read_csv(p, nrows=0, encoding="utf-8-sig") if p.suffix.lower() in (".csv", ".txt") else None
+        except UnicodeDecodeError:
+            head = pd.read_csv(p, nrows=0, encoding="cp949")
+        except Exception:
+            head = None
+        cols = {c.strip().upper() for c in head.columns} if head is not None else set()
+        if {"VS_GBN", "CARDT", "PATID"} <= cols:
+            print(f"  통합 데이터 파일: {p}")
+            return split_merged(_read_any(p))
     pick = {}
     for key in ("PINFO", "VITAL"):
         cands = [p for p in files if key in p.name.upper()
