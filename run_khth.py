@@ -277,6 +277,72 @@ def benchmark_models(split, evaluate) -> list:
     return out
 
 
+def mews_scores(X: pd.DataFrame) -> np.ndarray:
+    """MEWS(Subbe 2001) — 의식(AVPU) 항목은 데이터에 없어 제외한 4항목 합.
+
+    딥카스(DEWS) 원 논문이 비교군으로 쓴 점수라, NEWS와 함께 기준선으로 둔다.
+    """
+    def band(v, edges, pts):
+        v = np.asarray(v, dtype=float); out = np.zeros_like(v)
+        for (lo, hi), p in zip(edges, pts):
+            out = np.where((v >= lo) & (v < hi), p, out)
+        return np.where(np.isnan(v), 0, out)
+    sbp = band(X["sbp_last"], [(-1e9, 71), (71, 81), (81, 101), (101, 200), (200, 1e9)], [3, 2, 1, 0, 2])
+    hr = band(X["pulse_last"], [(-1e9, 41), (41, 51), (51, 101), (101, 111), (111, 130), (130, 1e9)], [2, 1, 0, 1, 2, 3])
+    rr = band(X["resp_rate_last"], [(-1e9, 9), (9, 15), (15, 21), (21, 30), (30, 1e9)], [2, 0, 1, 2, 3])
+    bt = band(X["temperature_last"], [(-1e9, 35), (35, 38.5), (38.5, 1e9)], [2, 0, 2])
+    return (sbp + hr + rr + bt).astype(float)
+
+
+def cluster_bootstrap(y, s_by_model: dict, groups, n=500, seed=0) -> dict:
+    """환자 단위 부트스트랩 — 같은 환자의 창끼리 상관을 고려한 AUPRC 95% CI와,
+    기준선(NEWS) 대비 AUPRC 차이(Δ)의 95% CI·양(+)일 확률. 집계값만 반환한다."""
+    from sklearn.metrics import average_precision_score
+    y = np.asarray(y); groups = np.asarray(groups)
+    pats = np.unique(groups); idx_by = {p: np.where(groups == p)[0] for p in pats}
+    rng = np.random.default_rng(seed)
+    draws = {k: [] for k in s_by_model}
+    for _ in range(n):
+        pick = rng.choice(pats, len(pats), replace=True)
+        i = np.concatenate([idx_by[p] for p in pick])
+        if not (0 < y[i].sum() < len(i)):
+            continue
+        for k, s in s_by_model.items():
+            draws[k].append(average_precision_score(y[i], np.asarray(s)[i]))
+    res = {}
+    if not draws or len(next(iter(draws.values()))) < 100:
+        return res
+    base = np.array(draws.get("NEWS", []))
+    for k, v in draws.items():
+        v = np.array(v)
+        r = {"lo": float(np.quantile(v, .025)), "hi": float(np.quantile(v, .975))}
+        if len(base) and k != "NEWS":
+            d = v - base
+            r.update({"d_lo": float(np.quantile(d, .025)), "d_hi": float(np.quantile(d, .975)), "p_better": float((d > 0).mean())})
+        res[k] = r
+    return res
+
+
+def calibration_outputs(y, s, path_png: Path) -> dict:
+    """보정(calibration) — Brier 점수와 10분위 보정 곡선(집계)."""
+    from sklearn.metrics import brier_score_loss
+    from sklearn.calibration import calibration_curve
+    out = {"brier": float(brier_score_loss(y, s))}
+    try:
+        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+        _font()
+        fy, fx = calibration_curve(y, s, n_bins=10, strategy="quantile")
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.plot([0, 1], [0, 1], ls="--", color="#9AA6B2", lw=1)
+        ax.plot(fx, fy, marker="o", color="#0EA5B7", lw=2)
+        ax.set_xlabel("예측 위험도(10분위 평균)"); ax.set_ylabel("실제 양성 비율")
+        ax.set_title(f"보정 곡선 — Brier {out['brier']:.3f}")
+        fig.tight_layout(); fig.savefig(path_png, dpi=150); plt.close(fig)
+    except Exception as e:
+        print(f"(보정 그림 생략: {e})")
+    return out
+
+
 def bootstrap_auprc_ci(y, s, n=300, seed=0):
     """AUPRC 95% 부트스트랩 신뢰구간(창 단위 재표집). 양성이 한쪽에 몰린 표본은 건너뛴다."""
     from sklearn.metrics import average_precision_score
@@ -374,9 +440,19 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
 
         score_nb = model_nb.predict_proba(split_nb.X_test)[:, 1]
         bench = benchmark_models(split, evaluate)
-        for m, s_ in [(m_full, score), (m_nb, score_nb), (m_news, news)] + bench:
-            lo, hi = bootstrap_auprc_ci(split.y_test, s_)
-            comparison.append({"모델": m.model_name, "AUPRC": m.auprc, "AUPRC 95%CI 하한": lo, "AUPRC 95%CI 상한": hi,
+        mews = mews_scores(split.X_test)
+        m_mews = evaluate("MEWS(의식 제외)", split.y_test, mews)
+        rows_ = [(m_full, score), (m_nb, score_nb), (m_news, news), (m_mews, mews)] + bench
+        boot = cluster_bootstrap(split.y_test, {("NEWS" if m.model_name == "NEWS" else m.model_name): s_ for m, s_ in rows_},
+                                 split.groups_test)
+        M["calibration_xgb"] = calibration_outputs(split.y_test, score, out / "fig_7_calibration.png")
+        for m, s_ in rows_:
+            b_ = boot.get(m.model_name, {})
+            lo, hi = b_.get("lo", np.nan), b_.get("hi", np.nan)
+            comparison.append({"모델": m.model_name, "AUPRC": m.auprc, "AUPRC 95%CI 하한(환자 부트스트랩)": lo,
+                               "AUPRC 95%CI 상한(환자 부트스트랩)": hi,
+                               "NEWS 대비 ΔAUPRC 하한": b_.get("d_lo", np.nan), "NEWS 대비 ΔAUPRC 상한": b_.get("d_hi", np.nan),
+                               "NEWS보다 나을 확률": b_.get("p_better", np.nan),
                                "ROC_AUC": m.roc_auc,
                                "민감도@특이도95%": m.sensitivity_at_95_specificity,
                                "정밀도@특이도95%": m.precision_at_threshold,
