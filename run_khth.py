@@ -280,6 +280,24 @@ def benchmark_models(split, evaluate) -> list:
     return out
 
 
+def add_clinical_score_features(split):
+    """NEWS·MEWS 점수 자체를 특징으로 추가 — 모델이 임상 점수 '위에' 추세·개인 기저선을 더 보게 한다.
+    각 창의 마지막 측정값으로만 계산하므로 정보 누수가 없다."""
+    from dataclasses import replace
+    from vitals_train import compute_news_scores
+    Xtr, Xte = split.X_train.copy(), split.X_test.copy()
+    for X in (Xtr, Xte):
+        X["clin_news"] = compute_news_scores(X)
+        X["clin_mews"] = mews_scores(X)
+    return replace(split, X_train=Xtr, X_test=Xte, feature_names=list(Xtr.columns))
+
+
+def ensemble_scores(scores: list) -> np.ndarray:
+    """순위 평균 앙상블 — 모델마다 점수 척도가 달라 순위로 맞춘 뒤 평균한다."""
+    from scipy.stats import rankdata
+    return np.mean([rankdata(s) / len(s) for s in scores], axis=0)
+
+
 def mews_scores(X: pd.DataFrame) -> np.ndarray:
     """MEWS(Subbe 2001) — 의식(AVPU) 항목은 데이터에 없어 제외한 4항목 합.
 
@@ -455,6 +473,7 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
                                  "positive_windows": mask(pos), "test_patients": 0, "note": "양성 창 10개 미만 — 학습 생략"})
             continue
         split = patient_level_split(w_full)
+        split = add_clinical_score_features(split)
         params = tune_xgboost(split, n_trials=trials, use_gpu=gpu) if tune else {}
         model, m_full = train_xgboost(split, use_gpu=gpu, **params)
         score = model.predict_proba(split.X_test)[:, 1]
@@ -483,6 +502,9 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         mews = mews_scores(split.X_test)
         m_mews = evaluate("MEWS(의식 제외)", split.y_test, mews)
         rows_ = [(m_full, score), (m_nb, score_nb), (m_news, news), (m_mews, mews)] + bench
+        if len(bench) >= 2:
+            ens = ensemble_scores([score] + [s_ for _, s_ in bench if _.model_name != "로지스틱 회귀"])
+            rows_.append((evaluate("앙상블(XGB+RF+HistGB 순위평균)", split.y_test, ens), ens))
         boot = cluster_bootstrap(split.y_test, {("NEWS" if m.model_name == "NEWS" else m.model_name): s_ for m, s_ in rows_},
                                  split.groups_test)
         M["calibration_xgb"] = calibration_outputs(split.y_test, score, out / "fig_7_calibration.png")
