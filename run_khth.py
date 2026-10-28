@@ -77,7 +77,10 @@ def split_merged(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """One long table with patient columns repeated on every vital row
     (e.g. KNUH_DATA.csv) -> (pinfo, vital)."""
     df.columns = [c.strip().upper() for c in df.columns]
-    pinfo = df[[c for c in PINFO_COLS if c in df.columns]].drop_duplicates(["PATID", "INDD"]).reset_index(drop=True)
+    pinfo = df[[c for c in PINFO_COLS if c in df.columns]]
+    if "CARDT" in pinfo.columns:   # 한 입원에 심정지 시각이 여럿이면 가장 이른 것
+        pinfo = pinfo.sort_values("CARDT", kind="stable")
+    pinfo = pinfo.drop_duplicates(["PATID", "INDD"]).reset_index(drop=True)
     vital = df[[c for c in VITAL_COLS if c in df.columns]]
     print(f"  통합 파일 분리: 입원 {len(pinfo):,}건 / 측정 {len(vital):,}행")
     return pinfo, vital
@@ -174,7 +177,7 @@ def prearrest_and_rescale(pinfo: pd.DataFrame, vital: pd.DataFrame, bucket_min: 
     60/bucket_min 배 늘려 같은 코드를 분 단위로 돌린다. 출력에서 다시 분으로 환산한다.
     """
     v = vital.copy()
-    card = pinfo[["PATID", "INDD", "CARDT"]].drop_duplicates(["PATID", "INDD"])
+    card = pinfo[["PATID", "INDD", "CARDT"]].sort_values("CARDT", kind="stable").drop_duplicates(["PATID", "INDD"])
     v = v.drop(columns=[c for c in ("CARDT",) if c in v.columns]).merge(card, on=["PATID", "INDD"], how="left")
     t, c = _dt(v["VSDT"]), _dt(v["CARDT"])
     rel_h = (t - c) / pd.Timedelta("1h")
@@ -193,7 +196,8 @@ def prearrest_and_rescale(pinfo: pd.DataFrame, vital: pd.DataFrame, bucket_min: 
 
 def data_profile(pinfo: pd.DataFrame, vital: pd.DataFrame) -> pd.DataFrame:
     """입원별 '심정지 전 기록 길이' 분포 — 어떤 시간 단위가 맞는지 판단하는 근거(집계만)."""
-    v = vital.merge(pinfo[["PATID", "INDD", "CARDT"]].drop_duplicates(["PATID", "INDD"]), on=["PATID", "INDD"], how="left")
+    v = vital.merge(pinfo[["PATID", "INDD", "CARDT"]].sort_values("CARDT", kind="stable").drop_duplicates(["PATID", "INDD"]),
+                    on=["PATID", "INDD"], how="left")
     t, c = _dt(v["VSDT"]), _dt(v["CARDT"])
     v = v.assign(rel_min=(t - c) / pd.Timedelta("1min"), stay=v["PATID"].astype(str) + "_" + v["INDD"].astype(str))
     pre = v[v["rel_min"] < 0]
@@ -231,7 +235,7 @@ def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False, ext_dir:
             mc = {m["모델"]: m for m in M.get("model_comparison", [])}
             x, n = mc.get("XGBoost(개인 기저선 포함)", {}), mc.get("NEWS", {})
             row.update({"창 수": hr.get("windows"), "양성 창 수": hr.get("positive_windows"),
-                        "테스트 입원 수": mask(int(hr.get("test_patients", 0) or 0)),
+                        "테스트 입원 수": hr.get("test_patients"),
                         "XGB AUPRC": x.get("AUPRC"), "NEWS AUPRC": n.get("AUPRC"),
                         "XGB ROC": x.get("ROC_AUC"), "NEWS ROC": n.get("ROC_AUC"),
                         "XGB 민감도@특이도95%": x.get("민감도@특이도95%"), "상태": "완료" if x else "양성 부족(학습 생략)"})
@@ -243,9 +247,14 @@ def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False, ext_dir:
     (out / "00_README.txt").write_text(README_OUT + README_AUTO, encoding="utf-8")
     s = pd.DataFrame(summary)
     print("\n[설정별 요약]\n" + s.to_string(index=False))
-    done = s[s["상태"] == "완료"]
+    done = s[s["상태"] == "완료"].copy()
     if len(done):
-        best = done.sort_values("XGB AUPRC", ascending=False).iloc[0]
+        # 테스트 입원이 적으면 AUPRC가 우연히 1.0이 될 수 있다 → 테스트 입원 20명 이상인 설정 중에서 고른다
+        n_ = pd.to_numeric(done["테스트 입원 수"], errors="coerce").fillna(0)
+        pool = done[n_ >= 20] if (n_ >= 20).any() else done
+        best = pool.sort_values("XGB AUPRC", ascending=False).iloc[0]
+        s["추천"] = ["★" if x == best["설정"] else "" for x in s["설정"]]
+        s.to_csv(out / "00_config_summary.csv", index=False, encoding="utf-8-sig")
         print(f"\n→ AUPRC 기준 가장 좋은 설정: {best['설정']} (XGB {best['XGB AUPRC']:.3f} vs NEWS {best['NEWS AUPRC']:.3f})")
     write_export_manifest(out)
     print(f"\n반출 대상: {out.resolve()} 폴더 전체 (집계값만)")
@@ -263,24 +272,45 @@ def benchmark_models(split, evaluate) -> list:
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LogisticRegression
     from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
-    models = {
-        "로지스틱 회귀": make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
-                                  LogisticRegression(max_iter=2000, class_weight="balanced")),
-        "랜덤 포레스트": make_pipeline(SimpleImputer(strategy="median"),
-                                  RandomForestClassifier(n_estimators=300, min_samples_leaf=3, class_weight="balanced",
-                                                         n_jobs=-1, random_state=42)),
-        "HistGradientBoosting": HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05,
-                                                               class_weight="balanced", random_state=42),
+    models = {   # 모델 생성도 try 안에서 — 구버전 sklearn에서 인자 오류가 나도 해당 모델만 생략
+        "로지스틱 회귀": lambda: make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
+                                          LogisticRegression(max_iter=2000, class_weight="balanced")),
+        "랜덤 포레스트": lambda: make_pipeline(SimpleImputer(strategy="median"),
+                                          RandomForestClassifier(n_estimators=300, min_samples_leaf=3, class_weight="balanced",
+                                                                 n_jobs=-1, random_state=42)),
+        "HistGradientBoosting": lambda: HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05,
+                                                                       class_weight="balanced", random_state=42),
     }
     out = []
-    for name, m in models.items():
+    for name, make in models.items():
         try:
+            m = make()
             m.fit(split.X_train, split.y_train)
             s = m.predict_proba(split.X_test)[:, 1]
             out.append((evaluate(name, split.y_test, s), s))
         except Exception as e:
             print(f"({name} 생략: {e})")
     return out
+
+
+def safe_patient_split(w, test_size=0.2, seed=42):
+    """환자 단위 분할 — 층화가 불가능하면(한 클래스 입원이 2명 미만) 층화 없이 분할.
+    거의 모든 입원이 양성 창을 가져 기존 분할 함수가 멈추는 문제를 막는다."""
+    from sklearn.model_selection import train_test_split
+    from vitals_data import PatientSplit
+    g = w.groups
+    pats = np.array(sorted(g.unique()))
+    pos = w.labels.groupby(g).max().reindex(pats).fillna(0).astype(int).to_numpy()
+    strat = pos if (len(np.unique(pos)) > 1 and np.bincount(pos).min() >= 2) else None
+    tr_p, te_p = train_test_split(pats, test_size=test_size, random_state=seed, stratify=strat)
+    tr, te = g.isin(tr_p).to_numpy(), g.isin(te_p).to_numpy()
+    Xtr, Xte = w.features[tr].reset_index(drop=True), w.features[te].reset_index(drop=True)
+    med = Xtr.median(numeric_only=True)
+    tta = w.time_to_arrest[te].to_numpy() if getattr(w, "time_to_arrest", None) is not None else None
+    return PatientSplit(X_train=Xtr.fillna(med).fillna(0), X_test=Xte.fillna(med).fillna(0),
+                        y_train=w.labels[tr].to_numpy(), y_test=w.labels[te].to_numpy(),
+                        groups_train=g[tr].to_numpy(), groups_test=g[te].to_numpy(),
+                        feature_names=list(Xtr.columns), imputation_medians=med, time_to_arrest_test=tta)
 
 
 def add_clinical_score_features(split):
@@ -380,7 +410,7 @@ def temporal_split(w):
     Xtr, Xte = w.features[tr].reset_index(drop=True), w.features[te].reset_index(drop=True)
     med = Xtr.median(numeric_only=True)
     tta = w.time_to_arrest[te].to_numpy() if getattr(w, "time_to_arrest", None) is not None else None
-    return PatientSplit(X_train=Xtr.fillna(med), X_test=Xte.fillna(med), y_train=w.labels[tr].to_numpy(),
+    return PatientSplit(X_train=Xtr.fillna(med).fillna(0), X_test=Xte.fillna(med).fillna(0), y_train=w.labels[tr].to_numpy(),
                         y_test=w.labels[te].to_numpy(), groups_train=g[tr].to_numpy(), groups_test=g[te].to_numpy(),
                         feature_names=list(Xtr.columns), imputation_medians=med, time_to_arrest_test=tta)
 
@@ -538,6 +568,7 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         print(f"(평균 궤적 그림 생략: {e})")
 
     comparison, burden_rows, horizon_rows = [], [], []
+    main_done = False   # 실제로 학습된 첫 지평을 본 결과로 쓴다
     for h in horizons:
         base_w = build_windows(cohort, prediction_horizon_hours=h, min_valid_fraction=0.34)
         w_full = add_static_features(add_personalized_features(base_w, cohort), cohort)
@@ -548,8 +579,7 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
             horizon_rows.append({"horizon_min": h * bucket_min, "windows": len(w_full.labels),
                                  "positive_windows": mask(pos), "test_patients": 0, "note": "양성 창 10개 미만 — 학습 생략"})
             continue
-        split = patient_level_split(w_full)
-        split = add_clinical_score_features(split)
+        split = add_clinical_score_features(safe_patient_split(w_full))
         params = tune_xgboost(split, n_trials=trials, use_gpu=gpu) if tune else {}
         model, m_full = train_xgboost(split, use_gpu=gpu, **params)
         score = model.predict_proba(split.X_test)[:, 1]
@@ -566,12 +596,14 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         m_full.model_name = "XGBoost(개인 기저선 포함)"
 
         horizon_rows.append({"horizon_min": h * bucket_min, "windows": len(w_full.labels), "positive_windows": pos,
-                             "test_patients": int(len(set(split.groups_test))),
+                             "test_patients": mask(int(len(set(split.groups_test)))),
                              "XGB_AUPRC": m_full.auprc, "NEWS_AUPRC": m_news.auprc,
                              "XGB_ROC": m_full.roc_auc, "NEWS_ROC": m_news.roc_auc,
                              "prevalence": m_full.prevalence})
-        if h != horizons[0]:
+        if main_done:
             continue
+        main_done = True
+        M["main_horizon_min"] = h * bucket_min
 
         score_nb = model_nb.predict_proba(split_nb.X_test)[:, 1]
         bench = benchmark_models(split, evaluate)
@@ -601,7 +633,7 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
             print(f"(하위집단 분석 생략: {e})")
         # 시간적 검증(앞 80% 입원 학습 → 뒤 20% 평가)
         try:
-            st = temporal_split(w_full)
+            st = add_clinical_score_features(temporal_split(w_full))
             if 0 < st.y_test.sum() < len(st.y_test) and st.y_train.sum() >= MASK_N:
                 mt, m_t = train_xgboost(st, use_gpu=gpu, **params)
                 st_news = compute_news_scores(st.X_test)
@@ -641,7 +673,8 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
             "기준": f"XGBoost @ 특이도 95% 임계값, 심정지 전 {48*bucket_min/60:g}h 이내 첫 경보",
             "평가 심정지 입원 수": mask(int(lead.get("arrest_patients", 0))),
             "검출 수": mask(int(lead.get("detected", 0))),
-            "검출률": lead.get("detection_rate", np.nan),
+            "검출률": (lead.get("detection_rate", np.nan)
+                    if min(int(lead.get("arrest_patients", 0)), int(lead.get("detected", 0))) >= MASK_N else np.nan),
             "선행시간 중앙값(h)": float(np.median(lts)) if len(lts) >= MASK_N else np.nan,
             "선행시간 Q1(h)": float(np.quantile(lts, .25)) if len(lts) >= MASK_N else np.nan,
             "선행시간 Q3(h)": float(np.quantile(lts, .75)) if len(lts) >= MASK_N else np.nan,
@@ -653,7 +686,7 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
             plot_pr_curves(split.y_test, {"XGBoost": score, "NEWS": news}, out / "fig_1_pr_curve.png")
             plot_alarm_burden_curve(split.y_test, {"XGBoost": score, "NEWS": news}, out / "fig_2_alarm_burden.png",
                                     sensitivities=np.linspace(0.5, 0.95, 10))
-            if len(lts) >= MASK_N:
+            if len(lts) >= 30:   # 막대 하나에 소수 환자가 드러나지 않도록 충분할 때만
                 plot_lead_time_distribution(lts, out / "fig_3_lead_time.png")
         except Exception as e:
             print(f"(그림 일부 생략: {e})")
@@ -667,7 +700,18 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
             M["shap_top"] = top.to_dict("records")
             _bar(top, out / "fig_4_shap_top.png")
         except Exception as e:
-            print(f"(SHAP 생략: {e})")
+            print(f"(shap 패키지 경로 실패 → xgboost 내장 기여도로 대체: {e})")
+            try:
+                import xgboost as xgb
+                Xs = split.X_test.sample(min(5000, len(split.X_test)), random_state=0)
+                contrib = model.get_booster().predict(xgb.DMatrix(Xs), pred_contribs=True)[:, :-1]
+                top = (pd.DataFrame({"feature": list(Xs.columns), "mean_abs_shap": np.abs(contrib).mean(axis=0)})
+                       .sort_values("mean_abs_shap", ascending=False).head(15).reset_index(drop=True))
+                top.to_csv(out / "05_shap_top.csv", index=False, encoding="utf-8-sig")
+                M["shap_top"] = top.to_dict("records")
+                _bar(top, out / "fig_4_shap_top.png")
+            except Exception as e2:
+                print(f"(SHAP 생략: {e2})")
 
         M["params"] = params
 
@@ -679,11 +723,21 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
     # 표현형
     try:
         from vitals_phenotype import cluster_phenotypes, patient_prearrest_signatures, plot_phenotypes
-        sig = patient_prearrest_signatures(cohort)
+        from dataclasses import replace as _rep
+        # 기저 6칸과 심정지 전 6칸이 겹치면 변화량이 0이 되므로, 심정지가 12칸 이후인 입원만 쓴다.
+        ok_ids = cohort.events.loc[cohort.events["arrest_hour"] >= 12, "patient_id"]
+        coh_ph = _rep(cohort, vitals=cohort.vitals[cohort.vitals["patient_id"].isin(ok_ids)],
+                      events=cohort.events[cohort.events["patient_id"].isin(ok_ids)])
+        sig = patient_prearrest_signatures(coh_ph)
         if len(sig) >= 3 * MASK_N:
             labels, cent = cluster_phenotypes(sig, k=3)
             sizes = pd.Series(labels).value_counts().sort_index()
             ph = cent.round(2).copy()
+            small = [int(n) < MASK_N for n in sizes]
+            ph = ph.astype(object)
+            for i, s_ in enumerate(small):
+                if s_:
+                    ph.iloc[i, :] = ""          # 소수 군집의 중심값은 개인 값이 될 수 있어 비움
             ph["군집 크기"] = [mask(int(n)) for n in sizes]
             ph.to_csv(out / "06_phenotypes.csv", encoding="utf-8-sig")
             M["phenotypes"] = ph.reset_index().astype(str).to_dict("records")
@@ -693,12 +747,25 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         print(f"(표현형 생략: {e})")
 
     M["elapsed_sec"] = round(time.time() - t0, 1)
-    (out / "metrics.json").write_text(json.dumps(M, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (out / "metrics.json").write_text(json.dumps(_json_clean(M), ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     (out / "00_README.txt").write_text(README_OUT, encoding="utf-8")
     print(f"\n완료 — {out.resolve()}  ({M['elapsed_sec']}초)")
     for p in sorted(out.iterdir()):
         print("  ", p.name)
     return M
+
+
+def _json_clean(o):
+    """NaN/Inf → null (표준 JSON)."""
+    if isinstance(o, dict):
+        return {str(k): _json_clean(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_clean(v) for v in o]
+    if isinstance(o, (float, np.floating)):
+        return None if not np.isfinite(o) else float(o)
+    if isinstance(o, np.integer):
+        return int(o)
+    return o
 
 
 def _font():
@@ -739,12 +806,14 @@ def _mean_trajectory(cohort, path: Path, VITALS, bucket_min=60):
         g = v.groupby("rel")[vit]
         q = g.quantile([.25, .5, .75]).unstack()
         n = g.count()
-        q = q[n >= MASK_N]
+        q = q[n >= 2 * MASK_N]
         ax.fill_between(q.index, q[.25], q[.75], alpha=.25, color="#0EA5B7")
         ax.plot(q.index, q[.5], color="#0A7C8A", lw=2)
         ax.axvline(0, color="#D97B1A", ls="--", lw=1)
         ax.set_title(vit); ax.set_xlabel(f"심정지까지 ({bucket_min}분 단위 칸)")
-    fig.suptitle("심정지 전 48시간 활력징후 — 시간대별 중앙값과 IQR (집계)")
+    span = 48 * bucket_min
+    span_txt = f"{span // 60}시간" if span >= 60 and span % 60 == 0 else f"{span}분"
+    fig.suptitle(f"심정지 전 {span_txt} 활력징후 — 시점별 중앙값과 IQR (n≥10 시점만, 집계)")
     fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
 
 
