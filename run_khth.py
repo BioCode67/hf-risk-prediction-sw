@@ -245,6 +245,52 @@ def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False) -> None:
     print(f"\n반출 대상: {out.resolve()} 폴더 전체 (집계값만)")
 
 
+# ─────────────────────────────────────────────── 모델 비교·신뢰구간
+def benchmark_models(split, evaluate) -> list:
+    """XGBoost만 쓰지 않았다는 근거 — 같은 환자 분할에서 대표 모델들을 함께 학습·평가한다.
+
+    로지스틱 회귀(해석 가능한 기준선), 랜덤 포레스트, HistGradientBoosting.
+    전부 scikit-learn(안심존 기설치)만 쓰고, 불균형은 class_weight 로 맞춘다.
+    """
+    from sklearn.pipeline import make_pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
+    models = {
+        "로지스틱 회귀": make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
+                                  LogisticRegression(max_iter=2000, class_weight="balanced")),
+        "랜덤 포레스트": make_pipeline(SimpleImputer(strategy="median"),
+                                  RandomForestClassifier(n_estimators=300, min_samples_leaf=3, class_weight="balanced",
+                                                         n_jobs=-1, random_state=42)),
+        "HistGradientBoosting": HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05,
+                                                               class_weight="balanced", random_state=42),
+    }
+    out = []
+    for name, m in models.items():
+        try:
+            m.fit(split.X_train, split.y_train)
+            s = m.predict_proba(split.X_test)[:, 1]
+            out.append((evaluate(name, split.y_test, s), s))
+        except Exception as e:
+            print(f"({name} 생략: {e})")
+    return out
+
+
+def bootstrap_auprc_ci(y, s, n=300, seed=0):
+    """AUPRC 95% 부트스트랩 신뢰구간(창 단위 재표집). 양성이 한쪽에 몰린 표본은 건너뛴다."""
+    from sklearn.metrics import average_precision_score
+    y = np.asarray(y); s = np.asarray(s)
+    rng = np.random.default_rng(seed); vals = []
+    for _ in range(n):
+        i = rng.integers(0, len(y), len(y))
+        if 0 < y[i].sum() < len(i):
+            vals.append(average_precision_score(y[i], s[i]))
+    if len(vals) < 50:
+        return (np.nan, np.nan)
+    return (float(np.quantile(vals, .025)), float(np.quantile(vals, .975)))
+
+
 # ─────────────────────────────────────────────── 분석
 def mask(n: int) -> str:
     return f"<{MASK_N}" if n < MASK_N else str(int(n))
@@ -326,8 +372,12 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         if h != horizons[0]:
             continue
 
-        for m in (m_full, m_nb, m_news):
-            comparison.append({"모델": m.model_name, "AUPRC": m.auprc, "ROC_AUC": m.roc_auc,
+        score_nb = model_nb.predict_proba(split_nb.X_test)[:, 1]
+        bench = benchmark_models(split, evaluate)
+        for m, s_ in [(m_full, score), (m_nb, score_nb), (m_news, news)] + bench:
+            lo, hi = bootstrap_auprc_ci(split.y_test, s_)
+            comparison.append({"모델": m.model_name, "AUPRC": m.auprc, "AUPRC 95%CI 하한": lo, "AUPRC 95%CI 상한": hi,
+                               "ROC_AUC": m.roc_auc,
                                "민감도@특이도95%": m.sensitivity_at_95_specificity,
                                "정밀도@특이도95%": m.precision_at_threshold,
                                "경보/100창@특이도95%": m.alarms_per_100_windows, "양성률": m.prevalence})
