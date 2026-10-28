@@ -4,7 +4,8 @@
 
     python run_khth.py <KHTH 데이터 폴더 또는 파일>          # 실데이터
     python run_khth.py --selftest                            # 합성 데이터로 동작 확인(안심존 첫 실행 전)
-    옵션: --horizons=1,4   --tune --trials=30   --gpu   --out=results
+    옵션: --bucket-min=10 (한 칸=10분)  --horizons=3,6 (칸 수: 30분·60분 앞)  --tune --trials=30  --out=results
+    심정지 이후 측정은 버린다(이 데이터는 측정의 대부분이 심정지 이후).
 
 입력: KHTH_PINFO, KHTH_VITAL (csv / xlsx / parquet / sas7bdat 자동 탐색, 인코딩 utf-8 → cp949 자동)
 출력(results/): 반출용 **집계값만** — 환자 단위 행·식별자·원값은 쓰지 않는다.
@@ -146,12 +147,46 @@ def fake_khth(n=160, seed=0) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pinfo, vital
 
 
+# ─────────────────────────────────────────────── 시간 단위·심정지 전 필터
+UNIT_MIN = 60  # 파이프라인의 '1시간' 한 칸이 실제 몇 분인지 (--bucket-min 으로 바꿈)
+
+
+def _dt(s: pd.Series) -> pd.Series:
+    return pd.to_datetime(s.astype(str).str.replace(r"[^0-9]", "", regex=True).str[:12],
+                          format="%Y%m%d%H%M", errors="coerce")
+
+
+def prearrest_and_rescale(pinfo: pd.DataFrame, vital: pd.DataFrame, bucket_min: int):
+    """심정지 이후 측정을 버리고, 시간축을 bucket_min 분 = 1 칸으로 늘린다.
+
+    파이프라인은 '시간' 단위로 창을 만든다. 측정이 심정지 직전 몇 시간에 몰린
+    데이터에서는 10분 단위가 맞으므로, 심정지 시각을 기준으로 (측정-심정지)를
+    60/bucket_min 배 늘려 같은 코드를 분 단위로 돌린다. 출력에서 다시 분으로 환산한다.
+    """
+    v = vital.copy()
+    card = pinfo[["PATID", "INDD", "CARDT"]].drop_duplicates(["PATID", "INDD"])
+    v = v.drop(columns=[c for c in ("CARDT",) if c in v.columns]).merge(card, on=["PATID", "INDD"], how="left")
+    t, c = _dt(v["VSDT"]), _dt(v["CARDT"])
+    rel_h = (t - c) / pd.Timedelta("1h")
+    prof = {
+        "측정 중 심정지 이후 비율(%)": round(100 * float((rel_h >= 0).mean()), 1),
+        "측정 중 심정지 6h 이전 비율(%)": round(100 * float((rel_h < -6).mean()), 1),
+        "측정 중 심정지 24h 이전 비율(%)": round(100 * float((rel_h < -24).mean()), 1),
+    }
+    keep = rel_h < 0
+    v = v[keep].copy()
+    k = 60.0 / bucket_min
+    v["VSDT"] = (c[keep] + (t[keep] - c[keep]) * k).dt.strftime("%Y%m%d%H%M")
+    print(f"  심정지 전 측정만 사용: {int(keep.sum()):,}/{len(keep):,}행, 단위 {bucket_min}분")
+    return v[[col for col in ("PATID", "INDD", "VSDT", "VS_GBN", "VS_RSLT") if col in v.columns]], prof
+
+
 # ─────────────────────────────────────────────── 분석
 def mask(n: int) -> str:
     return f"<{MASK_N}" if n < MASK_N else str(int(n))
 
 
-def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False) -> dict:
+def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False, bucket_min=60, profile=None) -> dict:
     from vitals_data import (VITALS, add_personalized_features, add_static_features,
                              build_windows, cohort_from_khth, patient_level_split)
     from vitals_train import (alarm_burden, compute_news_scores, evaluate, lead_time_summary,
@@ -159,41 +194,42 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
     from vitals_report import plot_alarm_burden_curve, plot_lead_time_distribution, plot_pr_curves
 
     out.mkdir(parents=True, exist_ok=True)
-    M: dict = {"generated": time.strftime("%Y-%m-%d %H:%M"), "mask_threshold": MASK_N}
+    M: dict = {"generated": time.strftime("%Y-%m-%d %H:%M"), "mask_threshold": MASK_N, "bucket_min": bucket_min}
+    u = bucket_min / 60.0  # 한 칸 → 시간
     t0 = time.time()
 
     cohort = cohort_from_khth(vital, pinfo)
     v = cohort.vitals
     stays = v["patient_id"].nunique()
     arrest_known = int(cohort.events["arrest_hour"].notna().sum())
-    obs_h = v.groupby("patient_id")["hour"].max()
-    ah = cohort.events["arrest_hour"].dropna()
+    obs_h = v.groupby("patient_id")["hour"].max() * u
+    ah = cohort.events["arrest_hour"].dropna() * u
     cs = pd.DataFrame([
         ("입원(PATID+INDD) 수", stays),
         ("환자(PATID) 수", pinfo["PATID"].nunique() if "PATID" in pinfo else np.nan),
         ("심정지 시각(CARDT) 확인 입원 수", arrest_known),
         ("활력징후 원 측정 행 수", len(vital)),
-        ("시간 단위(1h) 행 수", len(v)),
+        (f"{bucket_min}분 단위 행 수", len(v)),
         ("관찰시간 중앙값(h)", float(obs_h.median())),
         ("관찰시간 IQR(h)", f"{obs_h.quantile(.25):.0f}–{obs_h.quantile(.75):.0f}"),
-        ("입원→심정지 중앙값(h)", float(ah.median()) if len(ah) else np.nan),
-    ], columns=["항목", "값"])
+        ("첫 측정→심정지 중앙값(h)", float(ah.median()) if len(ah) else np.nan),
+    ] + list((profile or {}).items()), columns=["항목", "값"])
     miss = (1 - v[list(VITALS)].notna().mean()).mul(100).round(1)
     for k_, m_ in miss.items():
-        cs.loc[len(cs)] = (f"시간당 결측률 {k_}(%)", m_)
+        cs.loc[len(cs)] = (f"칸별 결측률 {k_}(%)", m_)
     cs.to_csv(out / "01_cohort_summary.csv", index=False, encoding="utf-8-sig")
     M["cohort"] = {r["항목"]: (r["값"] if not isinstance(r["값"], (np.floating, np.integer)) else float(r["값"])) for _, r in cs.iterrows()}
     print(cs.to_string(index=False))
 
     # 심정지 전 평균 궤적(집계) — 개별 환자 그림 대신
-    _mean_trajectory(cohort, out / "fig_6_prearrest_mean_trajectory.png", VITALS)
+    _mean_trajectory(cohort, out / "fig_6_prearrest_mean_trajectory.png", VITALS, bucket_min)
 
     comparison, burden_rows, horizon_rows = [], [], []
     for h in horizons:
-        base_w = build_windows(cohort, prediction_horizon_hours=h)
+        base_w = build_windows(cohort, prediction_horizon_hours=h, min_valid_fraction=0.34)
         w_full = add_static_features(add_personalized_features(base_w, cohort), cohort)
         pos = int(w_full.labels.sum())
-        print(f"\n[horizon {h}h] windows={len(w_full.labels):,} positives={pos:,}")
+        print(f"\n[horizon {h*bucket_min}분] windows={len(w_full.labels):,} positives={pos:,}")
         if pos < 10:
             print("  양성 창이 10개 미만 — 건너뜀"); continue
         split = patient_level_split(w_full)
@@ -212,7 +248,7 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         m_nb.model_name = "XGBoost(기저선 피처 제외)"
         m_full.model_name = "XGBoost(개인 기저선 포함)"
 
-        horizon_rows.append({"horizon_h": h, "windows": len(w_full.labels), "positive_windows": pos,
+        horizon_rows.append({"horizon_min": h * bucket_min, "windows": len(w_full.labels), "positive_windows": pos,
                              "test_patients": int(len(set(split.groups_test))),
                              "XGB_AUPRC": m_full.auprc, "NEWS_AUPRC": m_news.auprc,
                              "XGB_ROC": m_full.roc_auc, "NEWS_ROC": m_news.roc_auc,
@@ -236,9 +272,9 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         lead = lead_time_summary(split, score, thr)
         frame = pd.DataFrame({"p": split.groups_test, "tta": split.time_to_arrest_test, "s": score})
         arr = frame[frame["tta"].notna() & (frame["tta"] >= 0)]
-        lts = [float(g[(g.s >= thr) & (g.tta <= 48)].tta.max()) for _, g in arr.groupby("p") if ((g.s >= thr) & (g.tta <= 48)).any()]
+        lts = [u * float(g[(g.s >= thr) & (g.tta <= 48)].tta.max()) for _, g in arr.groupby("p") if ((g.s >= thr) & (g.tta <= 48)).any()]
         lt = pd.DataFrame([{
-            "기준": "XGBoost @ 특이도 95% 임계값, 심정지 전 48h 이내 첫 경보",
+            "기준": f"XGBoost @ 특이도 95% 임계값, 심정지 전 {48*bucket_min/60:g}h 이내 첫 경보",
             "평가 심정지 입원 수": mask(int(lead.get("arrest_patients", 0))),
             "검출 수": mask(int(lead.get("detected", 0))),
             "검출률": lead.get("detection_rate", np.nan),
@@ -321,7 +357,7 @@ def _bar(top: pd.DataFrame, path: Path):
     fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
 
 
-def _mean_trajectory(cohort, path: Path, VITALS):
+def _mean_trajectory(cohort, path: Path, VITALS, bucket_min=60):
     """심정지 시각 기준 -48h~0h, 시간대별 중앙값·IQR (각 시점 n≥MASK_N만)."""
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     _font()
@@ -340,7 +376,7 @@ def _mean_trajectory(cohort, path: Path, VITALS):
         ax.fill_between(q.index, q[.25], q[.75], alpha=.25, color="#0EA5B7")
         ax.plot(q.index, q[.5], color="#0A7C8A", lw=2)
         ax.axvline(0, color="#D97B1A", ls="--", lw=1)
-        ax.set_title(vit); ax.set_xlabel("심정지까지 시간(h)")
+        ax.set_title(vit); ax.set_xlabel(f"심정지까지 ({bucket_min}분 단위 칸)")
     fig.suptitle("심정지 전 48시간 활력징후 — 시간대별 중앙값과 IQR (집계)")
     fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
 
@@ -357,7 +393,8 @@ README_OUT = """PRODROME(전조) 분석 결과물 — 반출 신청용 설명
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     opt = {a.split("=")[0]: (a.split("=", 1)[1] if "=" in a else True) for a in sys.argv[1:] if a.startswith("--")}
-    horizons = tuple(int(x) for x in str(opt.get("--horizons", "1,4")).split(","))
+    bucket = int(opt.get("--bucket-min", 60 if "--selftest" in opt else 10))
+    horizons = tuple(int(x) for x in str(opt.get("--horizons", "1,4" if bucket >= 60 else "3,6")).split(","))
     out = Path(opt.get("--out", "results"))
     if "--selftest" in opt:
         print("[selftest] 합성 KHTH 데이터로 전체 흐름을 확인합니다(실데이터 아님).")
@@ -371,8 +408,9 @@ def main():
         print(f"  PINFO 열: {list(pinfo.columns)}\n  VITAL 열: {list(vital.columns)}")
         print(f"  VS_GBN 값: {sorted(vital['VS_GBN'].astype(str).str.upper().unique())[:20]}")
     pinfo, vital = normalize(pinfo, vital)
+    vital, prof = prearrest_and_rescale(pinfo, vital, bucket)
     run(pinfo, vital, out, horizons=horizons, tune="--tune" in opt,
-        trials=int(opt.get("--trials", 30)), gpu="--gpu" in opt)
+        trials=int(opt.get("--trials", 30)), gpu="--gpu" in opt, bucket_min=bucket, profile=prof)
 
 
 if __name__ == "__main__":
