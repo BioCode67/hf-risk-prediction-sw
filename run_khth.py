@@ -22,8 +22,11 @@
   04_lead_time.csv         선행시간 요약(중앙값·사분위·검출률)
   05_shap_top.csv          전역 SHAP 상위 15 특징
   06_phenotypes.csv        표현형 군집 중심(변화량) · 군집 크기(5 미만은 '<5' 마스킹)
-  07_horizon_sensitivity.csv  예측 지평(1h·4h …)별 성능
-  fig_*.png                PR 곡선 · 경보부담 곡선 · 선행시간 분포 · SHAP 요약(막대) · 표현형 · 심정지 전 평균 궤적
+  07_horizon_sensitivity.csv  예측 지평별 성능
+  08_temporal_validation.csv  시간적 검증(입원 시점 앞 80% 학습 → 뒤 20% 평가)
+  09_subgroup.csv          연령(65세)·성별 하위집단 AUPRC (n<5 마스킹)
+  fig_*.png                PR 곡선 · 경보부담 · 선행시간 · SHAP · 표현형 · 심정지 전 평균 궤적 · 보정 곡선
+  02 에는 NEWS·MEWS·로지스틱·랜덤포레스트·HistGB 비교와 환자 단위 부트스트랩 95% CI, NEWS 대비 ΔAUPRC 포함
   metrics.json             위 수치 전체
 """
 from __future__ import annotations
@@ -343,6 +346,43 @@ def calibration_outputs(y, s, path_png: Path) -> dict:
     return out
 
 
+def temporal_split(w):
+    """시간적 검증 — 입원 시점(INDD) 순으로 앞 80% 입원으로 학습, 뒤 20%로 평가.
+    무작위 분할보다 엄격하다(미래 환자에 대한 성능). 날짜 자체는 출력하지 않는다."""
+    from vitals_data import PatientSplit
+    g = w.groups.astype(str)
+    pats = pd.Series(g.unique())
+    order = pats.str.rsplit("_", n=1).str[-1]
+    pats = pats.iloc[np.argsort(order.to_numpy(), kind="stable")].to_numpy()
+    cut = int(len(pats) * 0.8)
+    tr, te = g.isin(pats[:cut]).to_numpy(), g.isin(pats[cut:]).to_numpy()
+    Xtr, Xte = w.features[tr].reset_index(drop=True), w.features[te].reset_index(drop=True)
+    med = Xtr.median(numeric_only=True)
+    tta = w.time_to_arrest[te].to_numpy() if getattr(w, "time_to_arrest", None) is not None else None
+    return PatientSplit(X_train=Xtr.fillna(med), X_test=Xte.fillna(med), y_train=w.labels[tr].to_numpy(),
+                        y_test=w.labels[te].to_numpy(), groups_train=g[tr].to_numpy(), groups_test=g[te].to_numpy(),
+                        feature_names=list(Xtr.columns), imputation_medians=med, time_to_arrest_test=tta)
+
+
+def subgroup_table(split, score, news) -> pd.DataFrame:
+    """하위집단 공정성 — 연령(65세 기준)·성별별 AUPRC. 양성 창·환자 수가 5 미만이면 마스킹."""
+    from sklearn.metrics import average_precision_score
+    X = split.X_test; y = np.asarray(split.y_test); g = np.asarray(split.groups_test)
+    defs = []
+    if "static_age" in X.columns:
+        defs += [("연령 65세 미만", (X["static_age"] < 65).to_numpy()), ("연령 65세 이상", (X["static_age"] >= 65).to_numpy())]
+    if "static_sex" in X.columns:
+        defs += [("남성", (X["static_sex"] == 1).to_numpy()), ("여성", (X["static_sex"] == 0).to_numpy())]
+    rows = []
+    for name, m in defs:
+        npat, npos = len(set(g[m])), int(y[m].sum())
+        ok = npat >= MASK_N and npos >= MASK_N and npos < m.sum()
+        rows.append({"하위집단": name, "입원 수": mask(npat), "양성 창 수": mask(npos),
+                     "XGBoost AUPRC": average_precision_score(y[m], np.asarray(score)[m]) if ok else np.nan,
+                     "NEWS AUPRC": average_precision_score(y[m], np.asarray(news)[m]) if ok else np.nan})
+    return pd.DataFrame(rows)
+
+
 def bootstrap_auprc_ci(y, s, n=300, seed=0):
     """AUPRC 95% 부트스트랩 신뢰구간(창 단위 재표집). 양성이 한쪽에 몰린 표본은 건너뛴다."""
     from sklearn.metrics import average_precision_score
@@ -446,6 +486,28 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         boot = cluster_bootstrap(split.y_test, {("NEWS" if m.model_name == "NEWS" else m.model_name): s_ for m, s_ in rows_},
                                  split.groups_test)
         M["calibration_xgb"] = calibration_outputs(split.y_test, score, out / "fig_7_calibration.png")
+        # 하위집단(연령·성별) 성능
+        try:
+            sg = subgroup_table(split, score, news)
+            if len(sg):
+                sg.to_csv(out / "09_subgroup.csv", index=False, encoding="utf-8-sig"); M["subgroup"] = sg.to_dict("records")
+        except Exception as e:
+            print(f"(하위집단 분석 생략: {e})")
+        # 시간적 검증(앞 80% 입원 학습 → 뒤 20% 평가)
+        try:
+            st = temporal_split(w_full)
+            if 0 < st.y_test.sum() < len(st.y_test) and st.y_train.sum() >= MASK_N:
+                mt, m_t = train_xgboost(st, use_gpu=gpu, **params)
+                st_news = compute_news_scores(st.X_test)
+                n_t = evaluate("NEWS", st.y_test, st_news)
+                tv = pd.DataFrame([{"검증 방식": "시간적 검증(입원 시점 앞 80% 학습 → 뒤 20% 평가)",
+                                    "평가 입원 수": mask(len(set(st.groups_test))), "평가 양성 창 수": mask(int(st.y_test.sum())),
+                                    "XGBoost AUPRC": m_t.auprc, "NEWS AUPRC": n_t.auprc,
+                                    "XGBoost ROC": m_t.roc_auc, "NEWS ROC": n_t.roc_auc}])
+                tv.to_csv(out / "08_temporal_validation.csv", index=False, encoding="utf-8-sig"); M["temporal"] = tv.to_dict("records")
+                print(f"  시간적 검증: XGB AUPRC {m_t.auprc:.3f} vs NEWS {n_t.auprc:.3f}")
+        except Exception as e:
+            print(f"(시간적 검증 생략: {e})")
         for m, s_ in rows_:
             b_ = boot.get(m.model_name, {})
             lo, hi = b_.get("lo", np.nan), b_.get("hi", np.nan)
