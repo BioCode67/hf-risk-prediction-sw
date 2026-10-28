@@ -755,6 +755,18 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
     return M
 
 
+def _print_env():
+    """실행 환경 버전 출력 — 안심존 PC에서 문제가 생기면 이 줄만 보고 원인을 좁힌다."""
+    import platform
+    vers = [f"Python {platform.python_version()}"]
+    for mod in ("pandas", "numpy", "sklearn", "xgboost", "shap", "matplotlib", "scipy"):
+        try:
+            vers.append(f"{mod} {__import__(mod).__version__}")
+        except Exception:
+            vers.append(f"{mod} 없음")
+    print("[환경] " + " · ".join(vers))
+
+
 def _json_clean(o):
     """NaN/Inf → null (표준 JSON)."""
     if isinstance(o, dict):
@@ -837,6 +849,10 @@ def main():
     bucket = int(opt.get("--bucket-min", 60 if "--selftest" in opt else 10))
     horizons = tuple(int(x) for x in str(opt.get("--horizons", "1,4" if bucket >= 60 else "3,6")).split(","))
     out = Path(opt.get("--out", "results"))
+    if "--out" not in opt and "--selftest" not in opt and out.exists() and any(out.iterdir()):
+        out = Path(time.strftime("results_%m%d_%H%M"))   # 이전 결과와 섞이지 않게 새 폴더
+        print(f"  기존 results 폴더가 있어 새 폴더에 저장합니다: {out}")
+    _print_env()
     if "--selftest" in opt:
         print("[selftest] 합성 KHTH 데이터로 전체 흐름을 확인합니다(실데이터 아님).")
         pinfo, vital = fake_khth()
