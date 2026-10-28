@@ -5,6 +5,7 @@
     python run_khth.py <KHTH 데이터 폴더 또는 파일>          # 실데이터 — 설정 3가지를 한 번에(자동)
     python run_khth.py --selftest                            # 합성 데이터로 동작 확인(안심존 첫 실행 전)
     옵션: --bucket-min=10 --horizons=3,6 (설정 하나만 돌릴 때)  --tune --trials=30  --out=results
+          --external=<폴더>  외부 사전학습 모델(model.json + features.json)로 외부 검증까지 함께
     심정지 이후 측정은 버린다(이 데이터는 측정의 대부분이 심정지 이후).
 
 자동 모드(기본): results/ 아래에 설정별 폴더를 만든다 — 하나가 실패해도 나머지는 계속.
@@ -211,7 +212,7 @@ def data_profile(pinfo: pd.DataFrame, vital: pd.DataFrame) -> pd.DataFrame:
 CONFIGS = (("A_10min", 10, (3, 6)), ("B_5min", 5, (3, 6)), ("C_60min", 60, (1, 4)))
 
 
-def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False) -> None:
+def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False, ext_dir: Path | None = None) -> None:
     """설정 3가지를 차례로 돌린다. 하나가 실패해도 나머지는 계속하고, 요약표를 남긴다."""
     import traceback
     out.mkdir(parents=True, exist_ok=True)
@@ -224,7 +225,8 @@ def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False) -> None:
         row = {"설정": name, "단위(분)": bucket, "예측 지평(분)": "·".join(str(h * bucket) for h in hz)}
         try:
             v2, p2 = prearrest_and_rescale(pinfo, vital, bucket)
-            M = run(pinfo, v2, out / name, horizons=hz, tune=tune, trials=trials, gpu=gpu, bucket_min=bucket, profile=p2)
+            M = run(pinfo, v2, out / name, horizons=hz, tune=tune, trials=trials, gpu=gpu, bucket_min=bucket, profile=p2,
+                    ext_dir=ext_dir)
             hr = (M.get("horizons") or [{}])[0]
             mc = {m["모델"]: m for m in M.get("model_comparison", [])}
             x, n = mc.get("XGBoost(개인 기저선 포함)", {}), mc.get("NEWS", {})
@@ -245,6 +247,7 @@ def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False) -> None:
     if len(done):
         best = done.sort_values("XGB AUPRC", ascending=False).iloc[0]
         print(f"\n→ AUPRC 기준 가장 좋은 설정: {best['설정']} (XGB {best['XGB AUPRC']:.3f} vs NEWS {best['NEWS AUPRC']:.3f})")
+    write_export_manifest(out)
     print(f"\n반출 대상: {out.resolve()} 폴더 전체 (집계값만)")
 
 
@@ -401,6 +404,78 @@ def subgroup_table(split, score, news) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def external_validation(split, ext_dir: Path, bucket_min: int, evaluate, out: Path) -> dict | None:
+    """외부 데이터(예: MIMIC-IV)로 사전학습한 XGBoost를 경북대 데이터에서 검증한다.
+
+    ext_dir/model.json (xgboost save_model) + ext_dir/features.json
+    ({"features": [...], "bucket_min": 60, "source": "MIMIC-IV"}) 를 읽는다.
+    ① 그대로 적용(외부 검증) ② 경북대 학습셋으로 이어서 학습(미세조정) ③ 경북대만 학습 — 를 같은 테스트셋에서 비교.
+    """
+    import xgboost as xgb
+    from vitals_train import compute_news_scores
+    meta = json.loads((ext_dir / "features.json").read_text(encoding="utf-8"))
+    if int(meta.get("bucket_min", 60)) != int(bucket_min):
+        print(f"  (외부 모델 단위 {meta.get('bucket_min')}분 ≠ 현재 {bucket_min}분 — 이 설정에서는 외부 검증 생략)")
+        return None
+    feats = list(meta["features"])
+    def align(X):
+        A = pd.DataFrame(index=X.index)
+        for f in feats:
+            A[f] = X[f] if f in X.columns else np.nan
+        return A
+    Xtr, Xte = align(split.X_train), align(split.X_test)
+    missing = [f for f in feats if f not in split.X_test.columns]
+    zero = xgb.XGBClassifier(); zero.load_model(str(ext_dir / "model.json"))
+    s0 = zero.predict_proba(Xte)[:, 1]
+    ft = xgb.XGBClassifier(n_estimators=150, learning_rate=0.03, max_depth=4, subsample=0.8, colsample_bytree=0.8,
+                           eval_metric="aucpr", random_state=42,
+                           scale_pos_weight=float((split.y_train == 0).sum()) / max(1, int(split.y_train.sum())))
+    ft.fit(Xtr, split.y_train, xgb_model=zero.get_booster())
+    s1 = ft.predict_proba(Xte)[:, 1]
+    news = compute_news_scores(split.X_test)
+    src = meta.get("source", "외부 데이터")
+    rows = []
+    for name, s in ((f"{src} 사전학습 그대로(외부 검증)", s0), (f"{src} 사전학습 + 경북대 미세조정", s1), ("NEWS", news)):
+        m = evaluate(name, split.y_test, s)
+        lo, hi = bootstrap_auprc_ci(split.y_test, s)
+        rows.append({"모델": name, "AUPRC": m.auprc, "AUPRC 95%CI 하한": lo, "AUPRC 95%CI 상한": hi,
+                     "ROC_AUC": m.roc_auc, "민감도@특이도95%": m.sensitivity_at_95_specificity})
+    df = pd.DataFrame(rows)
+    df["경북대에 없는 외부 특징 수"] = len(missing)
+    df.to_csv(out / "10_external_validation.csv", index=False, encoding="utf-8-sig")
+    print("  외부 검증:", ", ".join(f"{r['모델']} {r['AUPRC']:.3f}" for r in rows))
+    return {"rows": rows, "missing_features": len(missing)}
+
+
+def write_export_manifest(root: Path) -> None:
+    """반출 신청용 명세서 — results 아래 모든 파일의 경로·형식·용량·SHA-256·내용 설명(집계값만)."""
+    import hashlib
+    desc = {
+        "00_data_profile.csv": "심정지 전 기록 길이 분포(입원 수 집계, n<5 마스킹)",
+        "00_config_summary.csv": "시간 단위 설정별 핵심 성능 요약",
+        "00_README.txt": "결과물 설명(반출 심의용)",
+        "01_cohort_summary.csv": "코호트 규모·결측률·관찰시간 요약",
+        "02_model_comparison.csv": "모델별 AUPRC·ROC·민감도 등 성능 지표와 신뢰구간",
+        "03_alarm_burden.csv": "같은 민감도에서의 경보 부담 비교",
+        "04_lead_time.csv": "첫 경보 선행시간 요약(중앙값·사분위, n<5 마스킹)",
+        "05_shap_top.csv": "전역 특징 중요도 상위 15개",
+        "06_phenotypes.csv": "표현형 군집 중심값·군집 크기(n<5 마스킹)",
+        "07_horizon_sensitivity.csv": "예측 지평별 성능",
+        "08_temporal_validation.csv": "시간적 검증 성능",
+        "09_subgroup.csv": "연령·성별 하위집단 성능(n<5 마스킹)",
+        "10_external_validation.csv": "외부 사전학습 모델 검증 성능",
+        "metrics.json": "위 집계 수치 전체(JSON)",
+    }
+    rows = []
+    for f in sorted(p for p in root.rglob("*") if p.is_file() and p.name != "00_export_manifest.csv"):
+        d = desc.get(f.name, "집계 그래프(이미지)" if f.suffix.lower() == ".png" else "집계 결과")
+        rows.append({"파일": str(f.relative_to(root)).replace("\\", "/"), "형식": f.suffix.lstrip(".").upper(),
+                     "용량(bytes)": f.stat().st_size, "SHA-256": hashlib.sha256(f.read_bytes()).hexdigest(), "내용": d})
+    m = pd.DataFrame(rows)
+    m.to_csv(root / "00_export_manifest.csv", index=False, encoding="utf-8-sig")
+    print(f"\n반출 명세서: {root / '00_export_manifest.csv'}  (파일 {len(m)}개, 총 {m['용량(bytes)'].sum() / 1024:,.0f}KB)")
+
+
 def bootstrap_auprc_ci(y, s, n=300, seed=0):
     """AUPRC 95% 부트스트랩 신뢰구간(창 단위 재표집). 양성이 한쪽에 몰린 표본은 건너뛴다."""
     from sklearn.metrics import average_precision_score
@@ -420,7 +495,8 @@ def mask(n: int) -> str:
     return f"<{MASK_N}" if n < MASK_N else str(int(n))
 
 
-def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False, bucket_min=60, profile=None) -> dict:
+def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False, bucket_min=60, profile=None,
+        ext_dir: Path | None = None) -> dict:
     from vitals_data import (VITALS, add_personalized_features, add_static_features,
                              build_windows, cohort_from_khth, patient_level_split)
     from vitals_train import (alarm_burden, compute_news_scores, evaluate, lead_time_summary,
@@ -508,6 +584,14 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         boot = cluster_bootstrap(split.y_test, {("NEWS" if m.model_name == "NEWS" else m.model_name): s_ for m, s_ in rows_},
                                  split.groups_test)
         M["calibration_xgb"] = calibration_outputs(split.y_test, score, out / "fig_7_calibration.png")
+        # 외부 사전학습 모델 검증(--external=폴더 를 준 경우만)
+        if ext_dir is not None:
+            try:
+                ev_ = external_validation(split, ext_dir, bucket_min, evaluate, out)
+                if ev_:
+                    M["external_validation"] = ev_
+            except Exception as e:
+                print(f"(외부 검증 생략: {e})")
         # 하위집단(연령·성별) 성능
         try:
             sg = subgroup_table(split, score, news)
@@ -697,11 +781,15 @@ def main():
         print(f"  VS_GBN 값: {sorted(vital['VS_GBN'].astype(str).str.upper().unique())[:20]}")
     pinfo, vital = normalize(pinfo, vital)
     kw = dict(tune="--tune" in opt, trials=int(opt.get("--trials", 30)), gpu="--gpu" in opt)
+    ext = Path(opt["--external"]) if isinstance(opt.get("--external"), str) else None
+    if ext is not None and not (ext / "model.json").exists():
+        print(f"[경고] --external 폴더에 model.json 이 없습니다: {ext} — 외부 검증 없이 진행"); ext = None
     if "--selftest" not in opt and "--bucket-min" not in opt and "--horizons" not in opt:
-        run_auto(pinfo, vital, out, **kw)       # 실데이터 기본: 설정 3가지
+        run_auto(pinfo, vital, out, ext_dir=ext, **kw)       # 실데이터 기본: 설정 3가지
         return
     vital, prof = prearrest_and_rescale(pinfo, vital, bucket)
-    run(pinfo, vital, out, horizons=horizons, bucket_min=bucket, profile=prof, **kw)
+    run(pinfo, vital, out, horizons=horizons, bucket_min=bucket, profile=prof, ext_dir=ext, **kw)
+    write_export_manifest(out)
 
 
 if __name__ == "__main__":
