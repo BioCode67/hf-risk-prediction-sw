@@ -2,10 +2,16 @@
 # -*- coding: utf-8 -*-
 """PRODROME(전조) — K-Health 본선 안심존 원커맨드 분석.
 
-    python run_khth.py <KHTH 데이터 폴더 또는 파일>          # 실데이터
+    python run_khth.py <KHTH 데이터 폴더 또는 파일>          # 실데이터 — 설정 3가지를 한 번에(자동)
     python run_khth.py --selftest                            # 합성 데이터로 동작 확인(안심존 첫 실행 전)
-    옵션: --bucket-min=10 (한 칸=10분)  --horizons=3,6 (칸 수: 30분·60분 앞)  --tune --trials=30  --out=results
+    옵션: --bucket-min=10 --horizons=3,6 (설정 하나만 돌릴 때)  --tune --trials=30  --out=results
     심정지 이후 측정은 버린다(이 데이터는 측정의 대부분이 심정지 이후).
+
+자동 모드(기본): results/ 아래에 설정별 폴더를 만든다 — 하나가 실패해도 나머지는 계속.
+  A_10min  심정지 전 측정, 10분 단위, 30·60분 앞 예측
+  B_5min   심정지 전 측정, 5분 단위, 15·30분 앞 예측 (심정지 전 기록이 짧은 입원까지 포함)
+  C_60min  심정지 전 측정, 1시간 단위, 1·4시간 앞 예측 (10/27 첫 분석과 같은 설정)
+  00_data_profile.csv / 00_config_summary.csv — 데이터 특성과 설정별 핵심 성능(집계)
 
 입력: KHTH_PINFO, KHTH_VITAL (csv / xlsx / parquet / sas7bdat 자동 탐색, 인코딩 utf-8 → cp949 자동)
 출력(results/): 반출용 **집계값만** — 환자 단위 행·식별자·원값은 쓰지 않는다.
@@ -181,6 +187,64 @@ def prearrest_and_rescale(pinfo: pd.DataFrame, vital: pd.DataFrame, bucket_min: 
     return v[[col for col in ("PATID", "INDD", "VSDT", "VS_GBN", "VS_RSLT") if col in v.columns]], prof
 
 
+def data_profile(pinfo: pd.DataFrame, vital: pd.DataFrame) -> pd.DataFrame:
+    """입원별 '심정지 전 기록 길이' 분포 — 어떤 시간 단위가 맞는지 판단하는 근거(집계만)."""
+    v = vital.merge(pinfo[["PATID", "INDD", "CARDT"]].drop_duplicates(["PATID", "INDD"]), on=["PATID", "INDD"], how="left")
+    t, c = _dt(v["VSDT"]), _dt(v["CARDT"])
+    v = v.assign(rel_min=(t - c) / pd.Timedelta("1min"), stay=v["PATID"].astype(str) + "_" + v["INDD"].astype(str))
+    pre = v[v["rel_min"] < 0]
+    span = (-pre.groupby("stay")["rel_min"].min()).reindex(v["stay"].unique()).fillna(0)
+    rows = [("입원 수", len(span)),
+            ("심정지 전 측정이 있는 입원 수", int((span > 0).sum())),
+            ("심정지 전 기록 길이 중앙값(분)", round(float(span[span > 0].median()), 1) if (span > 0).any() else np.nan)]
+    for m in (10, 20, 30, 60, 120, 360, 1440):
+        rows.append((f"심정지 전 기록 {m}분 이상 입원 수", mask(int((span >= m).sum()))))
+    rows += [("측정 중 심정지 이후 비율(%)", round(100 * float((v["rel_min"] >= 0).mean()), 1)),
+             ("측정 중 심정지 1h 이전 비율(%)", round(100 * float((v["rel_min"] < -60).mean()), 1)),
+             ("측정 중 심정지 6h 이전 비율(%)", round(100 * float((v["rel_min"] < -360).mean()), 1))]
+    return pd.DataFrame(rows, columns=["항목", "값"])
+
+
+CONFIGS = (("A_10min", 10, (3, 6)), ("B_5min", 5, (3, 6)), ("C_60min", 60, (1, 4)))
+
+
+def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False) -> None:
+    """설정 3가지를 차례로 돌린다. 하나가 실패해도 나머지는 계속하고, 요약표를 남긴다."""
+    import traceback
+    out.mkdir(parents=True, exist_ok=True)
+    prof = data_profile(pinfo, vital)
+    prof.to_csv(out / "00_data_profile.csv", index=False, encoding="utf-8-sig")
+    print("\n[데이터 특성]\n" + prof.to_string(index=False))
+    summary = []
+    for name, bucket, hz in CONFIGS:
+        print(f"\n==================== {name} (단위 {bucket}분, 예측 {[h * bucket for h in hz]}분 앞) ====================")
+        row = {"설정": name, "단위(분)": bucket, "예측 지평(분)": "·".join(str(h * bucket) for h in hz)}
+        try:
+            v2, p2 = prearrest_and_rescale(pinfo, vital, bucket)
+            M = run(pinfo, v2, out / name, horizons=hz, tune=tune, trials=trials, gpu=gpu, bucket_min=bucket, profile=p2)
+            hr = (M.get("horizons") or [{}])[0]
+            mc = {m["모델"]: m for m in M.get("model_comparison", [])}
+            x, n = mc.get("XGBoost(개인 기저선 포함)", {}), mc.get("NEWS", {})
+            row.update({"창 수": hr.get("windows"), "양성 창 수": hr.get("positive_windows"),
+                        "테스트 입원 수": mask(int(hr.get("test_patients", 0) or 0)),
+                        "XGB AUPRC": x.get("AUPRC"), "NEWS AUPRC": n.get("AUPRC"),
+                        "XGB ROC": x.get("ROC_AUC"), "NEWS ROC": n.get("ROC_AUC"),
+                        "XGB 민감도@특이도95%": x.get("민감도@특이도95%"), "상태": "완료" if x else "양성 부족(학습 생략)"})
+        except Exception as e:
+            traceback.print_exc()
+            row["상태"] = f"실패: {type(e).__name__}"
+        summary.append(row)
+        pd.DataFrame(summary).to_csv(out / "00_config_summary.csv", index=False, encoding="utf-8-sig")
+    (out / "00_README.txt").write_text(README_OUT + README_AUTO, encoding="utf-8")
+    s = pd.DataFrame(summary)
+    print("\n[설정별 요약]\n" + s.to_string(index=False))
+    done = s[s["상태"] == "완료"]
+    if len(done):
+        best = done.sort_values("XGB AUPRC", ascending=False).iloc[0]
+        print(f"\n→ AUPRC 기준 가장 좋은 설정: {best['설정']} (XGB {best['XGB AUPRC']:.3f} vs NEWS {best['NEWS AUPRC']:.3f})")
+    print(f"\n반출 대상: {out.resolve()} 폴더 전체 (집계값만)")
+
+
 # ─────────────────────────────────────────────── 분석
 def mask(n: int) -> str:
     return f"<{MASK_N}" if n < MASK_N else str(int(n))
@@ -222,7 +286,10 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
     print(cs.to_string(index=False))
 
     # 심정지 전 평균 궤적(집계) — 개별 환자 그림 대신
-    _mean_trajectory(cohort, out / "fig_6_prearrest_mean_trajectory.png", VITALS, bucket_min)
+    try:
+        _mean_trajectory(cohort, out / "fig_6_prearrest_mean_trajectory.png", VITALS, bucket_min)
+    except Exception as e:
+        print(f"(평균 궤적 그림 생략: {e})")
 
     comparison, burden_rows, horizon_rows = [], [], []
     for h in horizons:
@@ -231,7 +298,10 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         pos = int(w_full.labels.sum())
         print(f"\n[horizon {h*bucket_min}분] windows={len(w_full.labels):,} positives={pos:,}")
         if pos < 10:
-            print("  양성 창이 10개 미만 — 건너뜀"); continue
+            print("  양성 창이 10개 미만 — 건너뜀")
+            horizon_rows.append({"horizon_min": h * bucket_min, "windows": len(w_full.labels),
+                                 "positive_windows": mask(pos), "test_patients": 0, "note": "양성 창 10개 미만 — 학습 생략"})
+            continue
         split = patient_level_split(w_full)
         params = tune_xgboost(split, n_trials=trials, use_gpu=gpu) if tune else {}
         model, m_full = train_xgboost(split, use_gpu=gpu, **params)
@@ -285,11 +355,14 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
         lt.to_csv(out / "04_lead_time.csv", index=False, encoding="utf-8-sig")
         M["lead_time"] = lt.iloc[0].to_dict()
 
-        plot_pr_curves(split.y_test, {"XGBoost": score, "NEWS": news}, out / "fig_1_pr_curve.png")
-        plot_alarm_burden_curve(split.y_test, {"XGBoost": score, "NEWS": news}, out / "fig_2_alarm_burden.png",
-                                sensitivities=np.linspace(0.5, 0.95, 10))
-        if len(lts) >= MASK_N:
-            plot_lead_time_distribution(lts, out / "fig_3_lead_time.png")
+        try:
+            plot_pr_curves(split.y_test, {"XGBoost": score, "NEWS": news}, out / "fig_1_pr_curve.png")
+            plot_alarm_burden_curve(split.y_test, {"XGBoost": score, "NEWS": news}, out / "fig_2_alarm_burden.png",
+                                    sensitivities=np.linspace(0.5, 0.95, 10))
+            if len(lts) >= MASK_N:
+                plot_lead_time_distribution(lts, out / "fig_3_lead_time.png")
+        except Exception as e:
+            print(f"(그림 일부 생략: {e})")
 
         # SHAP — 전역 중요도(집계)만. 개별 창 설명은 반출하지 않는다.
         try:
@@ -381,6 +454,11 @@ def _mean_trajectory(cohort, path: Path, VITALS, bucket_min=60):
     fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
 
 
+README_AUTO = """
+- 폴더 구성: A_10min · B_5min · C_60min = 시간 단위가 다른 같은 분석. 00_config_summary.csv 에 설정별 핵심 성능.
+- 00_data_profile.csv: 입원별 '심정지 전 기록 길이' 분포(입원 수 집계, n<5 마스킹).
+"""
+
 README_OUT = """PRODROME(전조) 분석 결과물 — 반출 신청용 설명
 ==================================================
 - 모든 파일은 집계 통계(평균·중앙값·비율·모델 성능 지표)와 그 그림만 담는다.
@@ -408,9 +486,12 @@ def main():
         print(f"  PINFO 열: {list(pinfo.columns)}\n  VITAL 열: {list(vital.columns)}")
         print(f"  VS_GBN 값: {sorted(vital['VS_GBN'].astype(str).str.upper().unique())[:20]}")
     pinfo, vital = normalize(pinfo, vital)
+    kw = dict(tune="--tune" in opt, trials=int(opt.get("--trials", 30)), gpu="--gpu" in opt)
+    if "--selftest" not in opt and "--bucket-min" not in opt and "--horizons" not in opt:
+        run_auto(pinfo, vital, out, **kw)       # 실데이터 기본: 설정 3가지
+        return
     vital, prof = prearrest_and_rescale(pinfo, vital, bucket)
-    run(pinfo, vital, out, horizons=horizons, tune="--tune" in opt,
-        trials=int(opt.get("--trials", 30)), gpu="--gpu" in opt, bucket_min=bucket, profile=prof)
+    run(pinfo, vital, out, horizons=horizons, bucket_min=bucket, profile=prof, **kw)
 
 
 if __name__ == "__main__":
