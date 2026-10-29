@@ -235,14 +235,17 @@ def narrate(
         PermissionError: When ``evidence["source"]`` is under a data-use
             agreement that forbids sending it to a third-party service.
     """
-    import requests
-
+    # The DUA guard runs before anything else — including the optional
+    # ``requests`` import — so restricted cohorts are refused even on an
+    # install without the LLM extras (CI, the offline 안심존).
     source = evidence.get("source", "unknown")
     if source in RESTRICTED_SOURCES:
         raise PermissionError(
             f"cohort source {source!r} is credentialed data and must not be sent to an "
             "external API; use format_evidence() instead"
         )
+
+    import requests
 
     response = requests.post(
         GROQ_URL,
