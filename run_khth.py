@@ -10,8 +10,10 @@
 
 자동 모드(기본): results/ 아래에 설정별 폴더를 만든다 — 하나가 실패해도 나머지는 계속.
   A_10min  심정지 전 측정, 10분 단위, 30·60분 앞 예측
-  B_5min   심정지 전 측정, 5분 단위, 15·30분 앞 예측 (심정지 전 기록이 짧은 입원까지 포함)
+  B_5min   심정지 전 측정, 5분 단위, 15분 앞 예측(+5·10·30·60분 지평 비교) (심정지 전 기록이 짧은 입원까지 포함)
   C_60min  심정지 전 측정, 1시간 단위, 1·4시간 앞 예측 (10/27 첫 분석과 같은 설정)
+  U_2min · U_15min  해상도 비교 — 같은 30분 앞 예측을 2분·15분 단위로(00_unit_comparison.csv)
+  끝나면 <결과폴더>_반출 폴더를 자동으로 만든다: 하위 폴더 없음 · 30개 이하 · 변수설명서 포함 → 그대로 반출 신청
   00_data_profile.csv / 00_config_summary.csv — 데이터 특성과 설정별 핵심 성능(집계)
 
 입력: KHTH_PINFO, KHTH_VITAL (csv / xlsx / parquet / sas7bdat 자동 탐색, 인코딩 utf-8 → cp949 자동)
@@ -213,7 +215,12 @@ def data_profile(pinfo: pd.DataFrame, vital: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["항목", "값"])
 
 
-CONFIGS = (("A_10min", 10, (3, 6)), ("B_5min", 5, (3, 6)), ("C_60min", 60, (1, 4)))
+# 본 분석 3가지(추천 ★ 후보) + 해상도 비교 2가지(같은 30분 앞 예측을 단위만 바꿔서)
+CONFIGS = (("A_10min", 10, (3, 6)), ("B_5min", 5, (3, 1, 2, 6, 12)), ("C_60min", 60, (1, 4)),
+           ("U_2min", 2, (15,)), ("U_15min", 15, (2,)))
+MAIN_CONFIGS = ("A_10min", "B_5min", "C_60min")
+KNOWN_OPTS = {"--bucket-min", "--horizons", "--out", "--selftest", "--tune", "--trials", "--gpu", "--external"}
+EXPORT_MAX_FILES = 30
 
 
 def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False, ext_dir: Path | None = None) -> None:
@@ -226,12 +233,14 @@ def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False, ext_dir:
     summary = []
     for name, bucket, hz in CONFIGS:
         print(f"\n==================== {name} (단위 {bucket}분, 예측 {[h * bucket for h in hz]}분 앞) ====================")
-        row = {"설정": name, "단위(분)": bucket, "예측 지평(분)": "·".join(str(h * bucket) for h in hz)}
+        row = {"설정": name, "단위(분)": bucket, "예측 지평(분)": "·".join(str(h * bucket) for h in sorted(hz))}
         try:
             v2, p2 = prearrest_and_rescale(pinfo, vital, bucket)
             M = run(pinfo, v2, out / name, horizons=hz, tune=tune, trials=trials, gpu=gpu, bucket_min=bucket, profile=p2,
                     ext_dir=ext_dir)
-            hr = (M.get("horizons") or [{}])[0]
+            hrs = M.get("horizons") or [{}]
+            hr = next((r for r in hrs if r.get("horizon_min") == M.get("main_horizon_min")), hrs[0])
+            row["_horizons"] = hrs
             mc = {m["모델"]: m for m in M.get("model_comparison", [])}
             x, n = mc.get("XGBoost(개인 기저선 포함)", {}), mc.get("NEWS", {})
             row.update({"창 수": hr.get("windows"), "양성 창 수": hr.get("positive_windows"),
@@ -245,11 +254,17 @@ def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False, ext_dir:
         summary.append(row)
         pd.DataFrame(summary).to_csv(out / "00_config_summary.csv", index=False, encoding="utf-8-sig")
     (out / "00_README.txt").write_text(README_OUT + README_AUTO, encoding="utf-8")
+    unit_comparison(summary).to_csv(out / "00_unit_comparison.csv", index=False, encoding="utf-8-sig")
+    for r in summary:
+        r.pop("_horizons", None)
     s = pd.DataFrame(summary)
+    pd.DataFrame(summary).to_csv(out / "00_config_summary.csv", index=False, encoding="utf-8-sig")
     print("\n[설정별 요약]\n" + s.to_string(index=False))
     done = s[s["상태"] == "완료"].copy()
     if len(done):
         # 테스트 입원이 적으면 AUPRC가 우연히 1.0이 될 수 있다 → 테스트 입원 20명 이상인 설정 중에서 고른다
+        n_ = pd.to_numeric(done["테스트 입원 수"], errors="coerce").fillna(0)
+        done = done[done["설정"].isin(MAIN_CONFIGS)] if done["설정"].isin(MAIN_CONFIGS).any() else done
         n_ = pd.to_numeric(done["테스트 입원 수"], errors="coerce").fillna(0)
         pool = done[n_ >= 20] if (n_ >= 20).any() else done
         best = pool.sort_values("XGB AUPRC", ascending=False).iloc[0]
@@ -257,7 +272,8 @@ def run_auto(pinfo, vital, out: Path, tune=False, trials=30, gpu=False, ext_dir:
         s.to_csv(out / "00_config_summary.csv", index=False, encoding="utf-8-sig")
         print(f"\n→ AUPRC 기준 가장 좋은 설정: {best['설정']} (XGB {best['XGB AUPRC']:.3f} vs NEWS {best['NEWS AUPRC']:.3f})")
     write_export_manifest(out)
-    print(f"\n반출 대상: {out.resolve()} 폴더 전체 (집계값만)")
+    star = s.loc[s.get("추천", pd.Series([""] * len(s))) == "★", "설정"]
+    make_export(out, star.iloc[0] if len(star) else None)
 
 
 # ─────────────────────────────────────────────── 모델 비교·신뢰구간
@@ -475,6 +491,99 @@ def external_validation(split, ext_dir: Path, bucket_min: int, evaluate, out: Pa
     df.to_csv(out / "10_external_validation.csv", index=False, encoding="utf-8-sig")
     print("  외부 검증:", ", ".join(f"{r['모델']} {r['AUPRC']:.3f}" for r in rows))
     return {"rows": rows, "missing_features": len(missing)}
+
+
+def unit_comparison(summary: list) -> pd.DataFrame:
+    """같은 예측 지평(30분)에서 시간 단위만 바꿨을 때 XGBoost와 NEWS의 AUPRC 비교(집계)."""
+    rows = []
+    for r in summary:
+        for h in r.get("_horizons") or []:
+            if h.get("horizon_min") == 30 and h.get("XGB_AUPRC") is not None:
+                x, n = h.get("XGB_AUPRC"), h.get("NEWS_AUPRC")
+                rows.append({"설정": r["설정"], "단위(분)": r["단위(분)"], "예측 지평(분)": 30,
+                             "창 수": h.get("windows"), "양성 창 수": h.get("positive_windows"),
+                             "테스트 입원 수": h.get("test_patients"), "XGB AUPRC": x, "NEWS AUPRC": n,
+                             "XGB-NEWS AUPRC 차이": (x - n) if x is not None and n is not None else None})
+    return pd.DataFrame(rows, columns=["설정", "단위(분)", "예측 지평(분)", "창 수", "양성 창 수", "테스트 입원 수",
+                                       "XGB AUPRC", "NEWS AUPRC", "XGB-NEWS AUPRC 차이"])
+
+
+VAR_GUIDE = """PRODROME(전조) 반출 자료 변수설명서
+==================================================
+공통: 모든 파일은 집계 통계·모델 성능 지표와 그 그림만 담는다. 환자 식별자(PATID)·날짜·시각·개별 측정값·
+환자별 예측값은 없다. 셀 n<5는 '<5'로 마스킹했다. 파일명 앞 접두어는 분석 설정이다.
+  A_10min = 10분 단위 · B_5min = 5분 단위 · C_60min = 60분 단위 · U_2min / U_15min = 해상도 비교(2분·15분 단위)
+
+[용어]
+창(window): 한 입원의 일정 구간 활력징후를 요약한 분석 단위 / 양성 창: 창 끝부터 예측 지평 안에 심정지가 발생한 창
+예측 지평: 몇 분 앞의 심정지를 예측하는지 / AUPRC: 정밀도-재현율 곡선 아래 면적(0~1, 높을수록 좋음)
+ROC(_AUC): ROC 곡선 아래 면적 / 민감도@특이도95%: 특이도 95% 임계값에서 심정지 전 창을 맞힌 비율
+NEWS·MEWS: 기존 임상 조기경보 점수(비교 기준) / XGBoost: 본 팀 예측 모델 / 95%CI: 입원 단위 부트스트랩 신뢰구간
+
+[00_config_summary.csv] 설정·단위(분)·예측 지평(분)·창 수·양성 창 수·테스트 입원 수·XGB/NEWS AUPRC·XGB/NEWS ROC·
+  XGB 민감도@특이도95%·상태(완료 여부)·추천(★: 테스트 입원 20개 이상 본 분석 설정 중 XGB AUPRC 최고)
+[00_data_profile.csv] 항목(입원 수, 심정지 전 기록 길이 분포, 측정 시점 비율 등) / 값(입원 수·%·분)
+[00_unit_comparison.csv] 같은 30분 앞 예측에서 단위별: 창 수·양성 창 수·테스트 입원 수·XGB AUPRC·NEWS AUPRC·차이
+[01_cohort_summary.csv] 항목(입원·환자 수, 측정 행 수, 관찰시간 중앙값·IQR, 활력징후별 결측률 등) / 값
+[02_model_comparison.csv] 모델(XGBoost 기저선 포함/제외, NEWS, MEWS, 로지스틱 회귀, 랜덤 포레스트, HistGB, 앙상블)·
+  AUPRC·AUPRC 95%CI 하한/상한·NEWS 대비 ΔAUPRC 하한/상한·NEWS보다 나을 확률(부트스트랩 비율)·ROC_AUC·
+  민감도/정밀도@특이도95%·경보/100창@특이도95%(창 100개당 경보 수)·양성률(양성 창 비율)
+[03_alarm_burden.csv] 모델·목표 민감도·실제 민감도·특이도·오경보 비율(경보 중 오경보 비율)·경보/100창
+[04_lead_time.csv] 기준(임계값·평가 구간)·평가 심정지 입원 수·검출 수·검출률·선행시간 중앙값/Q1/Q3(h: 첫 경보~심정지)
+[05_shap_top.csv] feature(변수명)·mean_abs_shap(평균 절대 SHAP: 예측 기여도, 클수록 중요)
+  변수명 = [활력징후]_[통계량]. pulse 맥박 · sbp 수축기혈압 · dbp 이완기혈압 · temperature 체온 · spo2 산소포화도 ·
+  resp_rate 호흡수 / _mean 평균 · _std 표준편차 · _min 최솟값 · _max 최댓값 · _last 마지막 값 · _delta 변화량 ·
+  _slope 추세 기울기 · _dev 환자 본인 기저선 대비 차이 / shock_index_last 쇼크지수(맥박/수축기혈압) ·
+  pulse_pressure_last 맥압 · clin_news/clin_mews NEWS/MEWS 점수 · age 연령 · sex 성별(남 1, 여 0)
+[06_phenotypes.csv] cluster(군집 번호)·[활력징후]_change(심정지 전 변화량 군집 중심)·군집 크기
+[07_horizon_sensitivity.csv] horizon_min(예측 지평, 분)·windows(창 수)·positive_windows(양성 창 수)·
+  test_patients(평가 입원 수)·XGB_AUPRC·NEWS_AUPRC·XGB_ROC·NEWS_ROC·prevalence(양성 창 비율)·note(비고)
+[08_temporal_validation.csv] 검증 방식(입원 시점 앞 80% 학습→뒤 20% 평가)·평가 입원 수·평가 양성 창 수·XGBoost/NEWS AUPRC·ROC
+[09_subgroup.csv] 하위집단(연령 65세 미만/이상, 남성, 여성)·입원 수·양성 창 수·XGBoost/NEWS AUPRC
+[10_external_validation.csv] 모델(외부 사전학습 그대로 / 미세조정 / NEWS)·AUPRC·95%CI·ROC_AUC·민감도@특이도95%·
+  경북대에 없는 외부 특징 수
+[fig_1] PR 곡선 · [fig_2] 같은 민감도에서 경보 수 · [fig_3] 선행시간 분포 · [fig_4] SHAP 상위 변수 ·
+[fig_5] 표현형 군집 · [fig_6] 심정지 전 시점별 활력징후 평균(시점당 n≥10) · [fig_7] 보정 곡선
+"""
+
+
+def make_export(root: Path, star: str | None) -> Path:
+    """반출 신청용 폴더를 자동으로 만든다 — 하위 폴더 없이, 30개 이하, JSON·명세서 제외, 변수설명서 포함."""
+    import shutil
+    dest = root.parent / f"{root.name}_반출"
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    picks = [(root / f, f) for f in ("00_README.txt", "00_config_summary.csv", "00_data_profile.csv",
+                                     "00_unit_comparison.csv")]
+    if star and (root / star).is_dir():
+        sd = root / star
+        picks += [(p, f"{star}_{p.name}") for p in sorted(sd.glob("[0-9][0-9]_*.csv"))]
+        picks += [(p, f"{star}_{p.name}") for p in sorted(sd.glob("fig_*.png"))]
+    for name, _, _ in CONFIGS:
+        if name == star or not (root / name).is_dir():
+            continue
+        for f in ("02_model_comparison.csv", "07_horizon_sensitivity.csv" if name in MAIN_CONFIGS else None):
+            if f and (root / name / f).exists():
+                picks.append((root / name / f, f"{name}_{f}"))
+    picks = [(p, n) for p, n in picks if p.exists()]
+    room = EXPORT_MAX_FILES - 1              # 변수설명서 1개 자리
+    dropped = picks[room:]
+    picks = picks[:room]
+    (dest / "00_변수설명.txt").write_text(VAR_GUIDE, encoding="utf-8")
+    for p, n in picks:
+        shutil.copy2(p, dest / n)
+    files = sorted(x.name for x in dest.iterdir())
+    kinds = pd.Series([Path(f).suffix.upper().lstrip(".") for f in files]).value_counts()
+    head = f"{dest.name} 폴더 내 {len(files)}개 (" + ", ".join(f"{k} {v}개" for k, v in kinds.items()) + ")"
+    listing = head + "\n" + "\n".join(f"{i}. {f}" for i, f in enumerate(files, 1))
+    (root / "00_반출_파일목록.txt").write_text(listing + "\n", encoding="utf-8")
+    print("\n[반출 신청용 폴더] " + str(dest.resolve()))
+    print("  신청서 파일명 칸: " + head + " — 세부 목록 별지")
+    print("  별지(파일 목록):\n    " + "\n    ".join(listing.split("\n")[1:]))
+    if dropped:
+        print(f"  ※ 하루 30개 제한으로 제외: {[n for _, n in dropped]}")
+    return dest
 
 
 def write_export_manifest(root: Path) -> None:
@@ -717,7 +826,8 @@ def run(pinfo, vital, out: Path, horizons=(1,), tune=False, trials=30, gpu=False
 
     pd.DataFrame(comparison).to_csv(out / "02_model_comparison.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(burden_rows).to_csv(out / "03_alarm_burden.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(horizon_rows).to_csv(out / "07_horizon_sensitivity.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(horizon_rows).sort_values("horizon_min").to_csv(out / "07_horizon_sensitivity.csv", index=False,
+                                                                encoding="utf-8-sig")
     M["model_comparison"], M["alarm_burden"], M["horizons"] = comparison, burden_rows, horizon_rows
 
     # 표현형
@@ -830,8 +940,10 @@ def _mean_trajectory(cohort, path: Path, VITALS, bucket_min=60):
 
 
 README_AUTO = """
-- 폴더 구성: A_10min · B_5min · C_60min = 시간 단위가 다른 같은 분석. 00_config_summary.csv 에 설정별 핵심 성능.
-- 00_data_profile.csv: 입원별 '심정지 전 기록 길이' 분포(입원 수 집계, n<5 마스킹).
+- 설정: A_10min · B_5min · C_60min = 시간 단위가 다른 같은 분석(본 분석). U_2min · U_15min = 같은 30분 앞 예측을
+  단위만 바꾼 해상도 비교. 반출 폴더에서는 파일명 앞 접두어로 설정을 구분한다.
+- 00_config_summary.csv: 설정별 핵심 성능(★ = 추천 설정). 00_unit_comparison.csv: 30분 앞 예측의 단위별 비교.
+- 00_data_profile.csv: 입원별 '심정지 전 기록 길이' 분포(입원 수 집계, n<5 마스킹). 00_변수설명.txt: 열 이름 설명.
 """
 
 README_OUT = """PRODROME(전조) 분석 결과물 — 반출 신청용 설명
@@ -846,6 +958,10 @@ README_OUT = """PRODROME(전조) 분석 결과물 — 반출 신청용 설명
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     opt = {a.split("=")[0]: (a.split("=", 1)[1] if "=" in a else True) for a in sys.argv[1:] if a.startswith("--")}
+    bad = [a for a in sys.argv[1:] if a.startswith("-") and a.split("=")[0] not in KNOWN_OPTS]
+    if bad:   # 오타 옵션이 조용히 무시되어 기본값으로 도는 것을 막는다
+        print(f"[오류] 알 수 없는 옵션: {bad}\n  사용 가능: {sorted(KNOWN_OPTS)}  (하이픈 두 개, 단어 사이도 하이픈)")
+        sys.exit(2)
     bucket = int(opt.get("--bucket-min", 60 if "--selftest" in opt else 10))
     horizons = tuple(int(x) for x in str(opt.get("--horizons", "1,4" if bucket >= 60 else "3,6")).split(","))
     out = Path(opt.get("--out", "results"))
