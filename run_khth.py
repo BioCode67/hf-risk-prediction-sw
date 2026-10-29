@@ -459,6 +459,11 @@ def external_validation(split, ext_dir: Path, bucket_min: int, evaluate, out: Pa
     """
     import xgboost as xgb
     from vitals_train import compute_news_scores
+    if (ext_dir / f"b{bucket_min}" / "model.json").exists():   # train_mimic_external.py 출력(b5/, b10/)
+        ext_dir = ext_dir / f"b{bucket_min}"
+    elif not (ext_dir / "features.json").exists():
+        print(f"  (외부 모델 폴더에 {bucket_min}분 단위 모델이 없음 — 이 설정에서는 외부 검증 생략)")
+        return None
     meta = json.loads((ext_dir / "features.json").read_text(encoding="utf-8"))
     if int(meta.get("bucket_min", 60)) != int(bucket_min):
         print(f"  (외부 모델 단위 {meta.get('bucket_min')}분 ≠ 현재 {bucket_min}분 — 이 설정에서는 외부 검증 생략)")
@@ -566,6 +571,10 @@ def make_export(root: Path, star: str | None) -> Path:
         for f in ("02_model_comparison.csv", "07_horizon_sensitivity.csv" if name in MAIN_CONFIGS else None):
             if f and (root / name / f).exists():
                 picks.append((root / name / f, f"{name}_{f}"))
+    for name, _, _ in CONFIGS:
+        ev = root / name / "10_external_validation.csv"
+        if name != star and ev.exists():
+            picks.insert(4, (ev, f"{name}_10_external_validation.csv"))
     picks = [(p, n) for p, n in picks if p.exists()]
     room = EXPORT_MAX_FILES - 1              # 변수설명서 1개 자리
     dropped = picks[room:]
@@ -983,7 +992,7 @@ def main():
     pinfo, vital = normalize(pinfo, vital)
     kw = dict(tune="--tune" in opt, trials=int(opt.get("--trials", 30)), gpu="--gpu" in opt)
     ext = Path(opt["--external"]) if isinstance(opt.get("--external"), str) else None
-    if ext is not None and not (ext / "model.json").exists():
+    if ext is not None and not ((ext / "model.json").exists() or any(ext.glob("b*/model.json"))):
         print(f"[경고] --external 폴더에 model.json 이 없습니다: {ext} — 외부 검증 없이 진행"); ext = None
     if "--selftest" not in opt and "--bucket-min" not in opt and "--horizons" not in opt:
         run_auto(pinfo, vital, out, ext_dir=ext, **kw)       # 실데이터 기본: 설정 3가지
