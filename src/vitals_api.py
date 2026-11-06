@@ -762,3 +762,182 @@ def explain(patient_id: str, hour: int | None = None) -> Narration:
     from vitals_narrate import DEFAULT_MODEL
 
     return Narration(text=text, llm_model=DEFAULT_MODEL)
+
+
+# --- Live bedside demo ----------------------------------------------------
+
+
+class LiveReadingIn(BaseModel):
+    """One reading from a device or the scenario; every vital is optional."""
+
+    t: float
+    pulse: float | None = None
+    sbp: float | None = None
+    dbp: float | None = None
+    temperature: float | None = None
+    spo2: float | None = None
+    resp_rate: float | None = None
+
+
+class LiveRequest(BaseModel):
+    """The session's readings so far. The server keeps nothing between calls."""
+
+    readings: list[LiveReadingIn]
+    step_seconds: float = 10.0
+
+
+class LiveScore(BaseModel):
+    """Risk, NEWS and evidence for the latest window of a live session."""
+
+    ready: bool
+    steps_observed: int
+    baseline_steps: int
+    step_seconds: float
+    model_source: str
+    risk: float | None
+    risk_level: RiskLevel | None
+    threshold: float
+    model_alarm: bool
+    news_score: float | None
+    #: How many of NEWS's five vitals were actually measured. A missing vital
+    #: scores 0 here, so a two-device session is not mistaken for a crisis.
+    news_measured: int
+    news_threshold: float
+    news_alarm: bool
+    disagreement: Literal["none", "model_only", "news_only"]
+    top_factors: list[Factor]
+    vitals: list[VitalPoint]
+    text: str
+
+
+def _live_news(row: pd.DataFrame) -> tuple[float, int]:
+    """NEWS over the vitals actually measured; absent vitals contribute 0.
+
+    The training pipeline imputes before scoring. Live there is nothing to
+    impute from, and ``compute_news_scores`` would score a missing value as
+    abnormal (``np.select`` falls through to its worst band), so score only
+    what was measured and say how many of the five that was.
+    """
+    from vitals_train import _news_pulse, _news_resp_rate, _news_sbp, _news_spo2, _news_temperature
+
+    parts = {
+        "resp_rate": _news_resp_rate,
+        "spo2": _news_spo2,
+        "temperature": _news_temperature,
+        "sbp": _news_sbp,
+        "pulse": _news_pulse,
+    }
+    total, measured = 0.0, 0
+    for vital, score in parts.items():
+        value = float(row[f"{vital}_last"].iloc[0])
+        if np.isfinite(value):
+            total += float(score(np.array([value]))[0])
+            measured += 1
+    return total, measured
+
+
+def _live_wording(text: str) -> str:
+    """The model's step is one *step* here, not one hour (time is compressed)."""
+    return text.replace("시간당", "단계당").replace("8시간", "최근 8단계").replace("시간", "단계")
+
+
+@app.post("/api/live/score", response_model=LiveScore)
+def live_score(request: LiveRequest) -> LiveScore:
+    """Score the newest window of a live session (see ``vitals_live``).
+
+    Until the session covers its own baseline period the score is withheld:
+    a number computed from a few seconds of data looks authoritative and is not.
+    """
+    from vitals_live import LiveReading, bin_readings, live_features, ready_state
+
+    if not 0.5 <= request.step_seconds <= 3600:
+        raise HTTPException(status_code=422, detail="step_seconds must be within 0.5–3600")
+    if len(request.readings) > 20000:
+        raise HTTPException(status_code=413, detail="too many readings in one request")
+
+    svc = service()
+    readings = [
+        LiveReading(t=item.t, values={vital: getattr(item, vital) for vital in VITALS})
+        for item in request.readings
+    ]
+    binned = bin_readings(readings, request.step_seconds)
+    state = ready_state(binned)
+
+    def point(vital: str, value: float, baseline: dict[str, float]) -> VitalPoint:
+        label, unit = VITAL_KO[vital]
+        return VitalPoint(
+            vital=vital,
+            label=label,
+            unit=unit,
+            value=round(value, 1) if np.isfinite(value) else None,
+            baseline=round(baseline[vital], 1) if vital in baseline else None,
+        )
+
+    empty = LiveScore(
+        ready=False,
+        steps_observed=state["steps_observed"],
+        baseline_steps=state["baseline_steps"],
+        step_seconds=request.step_seconds,
+        model_source=svc.source,
+        risk=None,
+        risk_level=None,
+        threshold=round(svc.threshold, 3),
+        model_alarm=False,
+        news_score=None,
+        news_measured=0,
+        news_threshold=NEWS_ALARM_THRESHOLD,
+        news_alarm=False,
+        disagreement="none",
+        top_factors=[],
+        vitals=[],
+        text="",
+    )
+    if binned.empty:
+        return empty
+
+    row, baseline = live_features(binned, list(svc.features.columns))
+    vitals_now = [point(vital, float(row[f"{vital}_last"].iloc[0]), baseline) for vital in VITALS]
+    if not state["baseline_ready"]:
+        return empty.model_copy(update={"vitals": vitals_now})
+
+    packet = build_evidence(
+        svc.model,
+        row,
+        0,
+        threshold=svc.threshold,
+        news_threshold=NEWS_ALARM_THRESHOLD,
+        source=svc.source,
+        patient_id="live",
+    )
+    news_score, news_measured = _live_news(row)
+    model_alarm = packet["model_alarm"]
+    news_alarm = news_score >= NEWS_ALARM_THRESHOLD
+    if model_alarm == news_alarm:
+        disagreement = "none"
+    else:
+        disagreement = "model_only" if model_alarm else "news_only"
+    factors = [
+        Factor(**{**factor, "description": _live_wording(factor["description"])})
+        for factor in packet["top_factors"]
+    ]
+    text = _live_wording(format_evidence({**packet, "news_score": news_score, "news_alarm": news_alarm}))
+
+    return LiveScore(
+        ready=True,
+        steps_observed=state["steps_observed"],
+        baseline_steps=state["baseline_steps"],
+        step_seconds=request.step_seconds,
+        model_source=svc.source,
+        risk=packet["risk"],
+        risk_level=risk_level(packet["risk"], svc.threshold),
+        threshold=packet["threshold"],
+        model_alarm=model_alarm,
+        news_score=news_score,
+        news_measured=news_measured,
+        news_threshold=packet["news_threshold"],
+        news_alarm=news_alarm,
+        disagreement=disagreement,
+        top_factors=factors,
+        vitals=vitals_now,
+        text=text,
+    )

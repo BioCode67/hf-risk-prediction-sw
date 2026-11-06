@@ -180,6 +180,13 @@ function Header({ overview }: { overview: ReturnType<typeof useDashboard>["overv
       </div>
 
       <div className="flex items-center gap-2">
+        <a
+          href="/live"
+          className="border-border bg-card hover:bg-muted inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium shadow-sm"
+        >
+          <span aria-hidden className="bg-critical size-2 animate-pulse rounded-full" />
+          실시간 병상 시연
+        </a>
         {/* No "syncing" pulse: the cohort is retrospective and fixed. */}
         <span className="border-border bg-card text-muted-foreground inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium shadow-sm">
           <span aria-hidden className="bg-success size-2 rounded-full" />
